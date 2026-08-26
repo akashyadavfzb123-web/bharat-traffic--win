@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { AuthUser, LoginCredentials, RegisterData, UserRole } from '../types/auth';
+import { authApi } from '../services/authApi';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -16,18 +17,58 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function mapRole(backendRole: string): UserRole {
+  if (backendRole === 'ADMIN' || backendRole === 'admin') return 'admin';
+  return 'user';
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toAuthUser(data: any): AuthUser {
+  return {
+    id: data.id,
+    name: data.full_name || data.name || data.email,
+    email: data.email,
+    role: mapRole(data.role),
+  };
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(() => {
     const saved = localStorage.getItem('bharat_traffic_user');
-    return saved ? JSON.parse(saved) : null;
+    if (saved) {
+      try {
+        return JSON.parse(saved) as AuthUser;
+      } catch {
+        return null;
+      }
+    }
+    return null;
   });
 
   const [role, setRoleState] = useState<UserRole>(() => {
-    return user ? user.role : 'admin';
+    return user ? user.role : 'user';
   });
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Verify token on mount by calling /auth/me
+  useEffect(() => {
+    const token = localStorage.getItem('bharat_traffic_token');
+    if (token && !user) {
+      authApi.getMe()
+        .then((data) => {
+          const authUser = toAuthUser(data);
+          setUser(authUser);
+          setRoleState(authUser.role);
+        })
+        .catch(() => {
+          // Token invalid — clear it
+          localStorage.removeItem('bharat_traffic_token');
+          localStorage.removeItem('bharat_traffic_user');
+        });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (user) {
@@ -38,88 +79,107 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [user]);
 
-  const setRole = (newRole: UserRole) => {
+  const setRole = useCallback((newRole: UserRole) => {
     setRoleState(newRole);
     if (user) {
       setUser({ ...user, role: newRole });
     }
-  };
+  }, [user]);
 
-  const clearError = () => setError(null);
+  const clearError = useCallback(() => setError(null), []);
 
-  const login = async (credentials: LoginCredentials): Promise<AuthUser> => {
+  const login = useCallback(async (credentials: LoginCredentials): Promise<AuthUser> => {
     setIsLoading(true);
     setError(null);
 
-    // Simulate network authentication delay
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      const tokenResponse = await authApi.login({
+        email: credentials.email,
+        password: credentials.password,
+      });
 
-    // Mock validation logic
-    if (!credentials.email || !credentials.password) {
+      // Store JWT token
+      localStorage.setItem('bharat_traffic_token', tokenResponse.access_token);
+
+      // Some backends include user in the response; others don't
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let userData: any = (tokenResponse as any).user;
+      if (!userData) {
+        // Fetch user profile after login
+        const meResponse = await authApi.getMe();
+        userData = meResponse;
+      }
+
+      const authUser = toAuthUser(userData);
+      setUser(authUser);
+      setRoleState(authUser.role);
       setIsLoading(false);
-      const msg = 'Please enter both email and password';
+      return authUser;
+    } catch (err: unknown) {
+      setIsLoading(false);
+      const apiError = err as { response?: { data?: { detail?: unknown } }; message?: string };
+      const rawDetail = apiError.response?.data?.detail;
+      let msg: string;
+      if (typeof rawDetail === 'string') {
+        msg = rawDetail;
+      } else if (Array.isArray(rawDetail) && rawDetail.length > 0) {
+        msg = rawDetail.map((e: any) => e.msg || String(e)).join('; ');
+      } else {
+        msg = apiError.message || 'Login failed. Please try again.';
+      }
       setError(msg);
       throw new Error(msg);
     }
+  }, []);
 
-    if (credentials.password.length < 6) {
-      setIsLoading(false);
-      const msg = 'Invalid credentials. Password must be at least 6 characters.';
-      setError(msg);
-      throw new Error(msg);
-    }
-
-    const nameFromEmail = credentials.email.split('@')[0];
-    const mockUser: AuthUser = {
-      id: `usr-${Date.now()}`,
-      name: nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1),
-      email: credentials.email,
-      role: credentials.role,
-    };
-
-    setUser(mockUser);
-    setRoleState(credentials.role);
-    setIsLoading(false);
-    return mockUser;
-  };
-
-  const register = async (data: RegisterData): Promise<AuthUser> => {
+  const register = useCallback(async (data: RegisterData): Promise<AuthUser> => {
     setIsLoading(true);
     setError(null);
 
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    try {
+      // Register creates the user (always USER role from backend)
+      await authApi.register({
+        name: data.name,
+        email: data.email,
+        password: data.password,
+      });
 
-    if (!data.email || !data.password || !data.name) {
+      // Auto-login after registration
+      const tokenResponse = await authApi.login({
+        email: data.email,
+        password: data.password,
+      });
+
+      localStorage.setItem('bharat_traffic_token', tokenResponse.access_token);
+
+      const authUser = toAuthUser(tokenResponse.user);
+      setUser(authUser);
+      setRoleState(authUser.role);
       setIsLoading(false);
-      const msg = 'Please fill in all required fields';
+      return authUser;
+    } catch (err: unknown) {
+      setIsLoading(false);
+      const apiError = err as { response?: { data?: { detail?: unknown } }; message?: string };
+      const rawDetail = apiError.response?.data?.detail;
+      let msg: string;
+      if (typeof rawDetail === 'string') {
+        msg = rawDetail;
+      } else if (Array.isArray(rawDetail) && rawDetail.length > 0) {
+        msg = rawDetail.map((e: any) => e.msg || String(e)).join('; ');
+      } else {
+        msg = apiError.message || 'Registration failed. Please try again.';
+      }
       setError(msg);
       throw new Error(msg);
     }
+  }, []);
 
-    if (data.password !== data.confirmPassword) {
-      setIsLoading(false);
-      const msg = 'Passwords do not match';
-      setError(msg);
-      throw new Error(msg);
-    }
-
-    const newUser: AuthUser = {
-      id: `usr-${Date.now()}`,
-      name: data.name,
-      email: data.email,
-      role: data.role,
-    };
-
-    setUser(newUser);
-    setRoleState(data.role);
-    setIsLoading(false);
-    return newUser;
-  };
-
-  const logout = () => {
+  const logout = useCallback(() => {
     setUser(null);
+    setRoleState('user');
+    localStorage.removeItem('bharat_traffic_token');
     localStorage.removeItem('bharat_traffic_user');
-  };
+  }, []);
 
   return (
     <AuthContext.Provider

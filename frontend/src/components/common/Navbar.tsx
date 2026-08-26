@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
+import { useRealtime } from '../../context/RealtimeContext';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -8,7 +10,10 @@ import {
   Radio,
   MapPin,
   AlertTriangle,
-  Menu,
+  LogOut,
+  Pause,
+  Play,
+  Clock,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -17,7 +22,16 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
   const { role, setRole, selectedCity, setSelectedCity } = useApp();
+  const { user, logout } = useAuth();
+  const { isRunning, toggleSimulation, snapshot, speed, setSpeed } = useRealtime();
   const navigate = useNavigate();
+
+  // Live clock
+  const [currentTime, setCurrentTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleRoleToggle = (newRole: 'user' | 'admin') => {
     setRole(newRole);
@@ -28,8 +42,26 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
     }
   };
 
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  // Sync app role with auth user role
+  React.useEffect(() => {
+    if (user && user.role !== role) {
+      setRole(user.role);
+    }
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isAdmin = role === 'admin';
+
   return (
-    <header className="h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-50">
+    <header className={`h-14 border-b px-4 flex items-center justify-between sticky top-0 z-50 ${
+      isAdmin
+        ? 'border-emerald-500/20 bg-slate-900/95 backdrop-blur-md'
+        : 'border-slate-800 bg-slate-900/90 backdrop-blur-md'
+    }`}>
       {/* Left Brand & Mobile Menu Button */}
       <div className="flex items-center gap-3">
         {onMobileMenuToggle && (
@@ -38,22 +70,34 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
             className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
             aria-label="Toggle Navigation Menu"
           >
-            <Menu className="w-5 h-5" />
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
         )}
 
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-emerald-500 p-0.5 shadow-lg shadow-cyan-500/20">
-          <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-            <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
+        <div className={`w-8 h-8 rounded-lg p-0.5 shadow-lg ${
+          isAdmin
+            ? 'bg-gradient-to-tr from-emerald-500 to-teal-400 shadow-emerald-500/20'
+            : 'bg-gradient-to-tr from-cyan-500 to-emerald-500 shadow-cyan-500/20'
+        }`}>
+          <div className="w-full h-full bg-slate-950 rounded-[6px] flex items-center justify-center">
+            <Activity className={`w-4 h-4 animate-pulse ${isAdmin ? 'text-emerald-400' : 'text-cyan-400'}`} />
           </div>
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-base sm:text-lg font-extrabold tracking-wide bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-200 bg-clip-text text-transparent font-mono">
+            <h1 className={`text-base sm:text-lg font-extrabold tracking-wide bg-clip-text text-transparent font-mono ${
+              isAdmin
+                ? 'bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-200'
+                : 'bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-200'
+            }`}>
               BHARAT TRAFFIC TWIN
             </h1>
-            <span className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-bold rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-              v1.0-USER
+            <span className={`hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-bold rounded border ${
+              isAdmin
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+            }`}>
+              v1.0
             </span>
           </div>
           <p className="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1">
@@ -63,8 +107,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
         </div>
       </div>
 
-      {/* Middle Ticker / City Selector */}
-      <div className="hidden lg:flex items-center gap-4 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800">
+      {/* Middle: Live Clock, City Selector, Simulation Status */}
+      <div className="hidden lg:flex items-center gap-3 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800">
+        {/* Live Clock */}
+        <div className="flex items-center gap-1.5 text-xs text-slate-300">
+          <Clock className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="font-mono font-bold text-cyan-300 tabular-nums">
+            {currentTime.toLocaleTimeString('en-IN', { hour12: false })}
+          </span>
+        </div>
+
+        <div className="h-4 w-[1px] bg-slate-800" />
+
+        {/* City Selector */}
         <div className="flex items-center gap-1.5 text-xs text-slate-300">
           <MapPin className="w-3.5 h-3.5 text-cyan-400" />
           <span>City:</span>
@@ -82,16 +137,70 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
 
         <div className="h-4 w-[1px] bg-slate-800" />
 
-        <div className="flex items-center gap-2 text-xs text-amber-400">
-          <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
-          <span className="truncate max-w-[260px]">
-            Alert: Silk Board Junction delay (+17m)
+        {/* Live Telemetry Pulse Indicator */}
+        <div className="flex items-center gap-1.5">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className={`absolute inline-flex h-full w-full rounded-full ${isRunning ? 'bg-emerald-400 animate-pulse-ring' : 'bg-slate-500'}`} />
+            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isRunning ? 'bg-emerald-400' : 'bg-slate-500'}`} />
           </span>
+          <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase">
+            {isRunning ? 'LIVE' : 'PAUSED'}
+          </span>
+        </div>
+
+        <div className="h-4 w-[1px] bg-slate-800" />
+
+        {/* Simulation Speed + Toggle */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleSimulation}
+            className="p-1 rounded hover:bg-slate-800 transition-colors"
+            title={isRunning ? 'Pause Telemetry' : 'Resume Telemetry'}
+          >
+            {isRunning ? (
+              <Pause className="w-3.5 h-3.5 text-amber-400" />
+            ) : (
+              <Play className="w-3.5 h-3.5 text-emerald-400" />
+            )}
+          </button>
+          <select
+            value={speed}
+            onChange={(e) => setSpeed(e.target.value as 'realtime' | 'fast' | 'paused')}
+            className="bg-transparent text-[10px] font-mono text-slate-400 focus:outline-none cursor-pointer"
+            title="Simulation Speed"
+          >
+            <option value="realtime" className="bg-slate-900">1x</option>
+            <option value="fast" className="bg-slate-900">3x</option>
+          </select>
+        </div>
+
+        <div className="h-4 w-[1px] bg-slate-800" />
+
+        {/* Live Incident Count */}
+        <div className="flex items-center gap-1.5 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+          <span className="text-amber-300 font-mono font-bold">
+            {snapshot.cityStats.activeIncidents}
+          </span>
+          <span className="text-slate-500 hidden xl:inline">incidents</span>
         </div>
       </div>
 
-      {/* Role Switcher */}
+      {/* Right: User info + Role Switcher + Logout */}
       <div className="flex items-center gap-2">
+        {/* User Info */}
+        {user && (
+          <div className="hidden sm:flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs">
+            <span className="text-slate-400">{user.name}</span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+              user.role === 'admin' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-cyan-500/20 text-cyan-400'
+            }`}>
+              {user.role.toUpperCase()}
+            </span>
+          </div>
+        )}
+
+        {/* Role Switcher */}
         <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800">
           <button
             onClick={() => handleRoleToggle('user')}
@@ -118,6 +227,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
             <span className="sm:hidden">Admin</span>
           </button>
         </div>
+
+        {/* Logout Button */}
+        <button
+          onClick={handleLogout}
+          className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+          title="Logout"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </header>
   );

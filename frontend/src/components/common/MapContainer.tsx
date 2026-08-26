@@ -11,7 +11,9 @@ interface MapProps {
   routes?: RouteOption[];
   roadGeoJSON?: RoadGeoJSONCollection;
   selectedRoadId?: string | null;
+  selectedJunctionId?: string | null;
   onRoadClick?: (road: RoadSegmentProperties) => void;
+  onJunctionClick?: (junction: Junction) => void;
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
@@ -24,6 +26,8 @@ export const MapContainer: React.FC<MapProps> = ({
   routes = [],
   roadGeoJSON,
   onRoadClick,
+  onJunctionClick,
+  selectedJunctionId,
   center = [77.6228, 12.9172], // Silk Board / Bengaluru default
   zoom = 12,
   interactive = true,
@@ -159,8 +163,11 @@ export const MapContainer: React.FC<MapProps> = ({
       // Add Markers for Junctions
       junctions.forEach((j) => {
         const el = document.createElement('div');
+        const isSelected = j.id === selectedJunctionId;
         el.className =
-          'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 border-slate-900 shadow-lg';
+          `w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 shadow-lg ${
+            isSelected ? 'border-white scale-125 ring-2 ring-cyan-400' : 'border-slate-900'
+          }`;
 
         if (j.status === 'critical') {
           el.style.backgroundColor = '#ef4444';
@@ -176,6 +183,11 @@ export const MapContainer: React.FC<MapProps> = ({
         const inner = document.createElement('div');
         inner.className = 'w-2 h-2 rounded-full bg-white';
         el.appendChild(inner);
+
+        // Click handler for junction inspection
+        el.addEventListener('click', () => {
+          if (onJunctionClick) onJunctionClick(j);
+        });
 
         const popupContent = `
           <div style="font-family: sans-serif;">
@@ -244,7 +256,7 @@ export const MapContainer: React.FC<MapProps> = ({
     return () => {
       map.remove();
     };
-  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, onRoadClick, center, zoom, interactive]);
+  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, onRoadClick, onJunctionClick, selectedJunctionId, center, zoom, interactive]);
 
   return (
     <div className="relative w-full h-full min-h-[350px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950">

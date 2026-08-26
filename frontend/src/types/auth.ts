@@ -1,7 +1,7 @@
 export type UserRole = 'user' | 'admin';
 
 export interface AuthUser {
-  id: string;
+  id: number;
   name: string;
   email: string;
   role: UserRole;
@@ -11,7 +11,6 @@ export interface AuthUser {
 export interface LoginCredentials {
   email: string;
   password: string;
-  role: UserRole;
 }
 
 export interface RegisterData {
@@ -19,5 +18,22 @@ export interface RegisterData {
   email: string;
   password: string;
   confirmPassword: string;
-  role: UserRole;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: {
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+  };
+}
+
+export interface UserOut {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
 }

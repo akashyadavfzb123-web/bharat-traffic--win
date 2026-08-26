@@ -17,3 +17,4 @@ class TrafficSignal(Base, TimestampMixin):
 
     # relationships
     intersection: Mapped["Intersection"] = relationship(back_populates="traffic_signal")
+    optimizations: Mapped[list["SignalOptimization"]] = relationship(back_populates="signal")

@@ -1,19 +1,31 @@
 export interface RouteConfig {
   path: string;
   name: string;
+  module: string;
 }
 
+export type AdminModule = 'overview' | 'monitoring' | 'optimization' | 'response' | 'intelligence' | 'system';
+
+export const ADMIN_MODULE_LABELS: Record<AdminModule, string> = {
+  overview: 'Overview',
+  monitoring: 'Monitoring',
+  optimization: 'Optimization',
+  response: 'Response',
+  intelligence: 'Intelligence',
+  system: 'System',
+};
+
 export const ADMIN_ROUTES: RouteConfig[] = [
-  { path: '/admin/overview', name: 'Overview' },
-  { path: '/admin/live-traffic', name: 'Live Traffic' },
-  { path: '/admin/digital-twin', name: 'Digital Twin' },
-  { path: '/admin/predictions', name: 'Predictions' },
-  { path: '/admin/signal-optimization', name: 'Signal Optimization' },
-  { path: '/admin/what-if', name: 'What-If Scenarios' },
-  { path: '/admin/emergency-corridor', name: 'Emergency Corridor' },
-  { path: '/admin/incidents', name: 'Incident Management' },
-  { path: '/admin/analytics', name: 'Analytics' },
-  { path: '/admin/reports', name: 'Reports' },
-  { path: '/admin/city-management', name: 'City Management' },
-  { path: '/admin/settings', name: 'Settings' },
+  { path: '/admin/overview', name: 'Overview', module: 'overview' },
+  { path: '/admin/live-traffic', name: 'Live Traffic', module: 'monitoring' },
+  { path: '/admin/digital-twin', name: 'Digital Twin', module: 'monitoring' },
+  { path: '/admin/predictions', name: 'Predictions', module: 'monitoring' },
+  { path: '/admin/signal-optimization', name: 'Signal Optimization', module: 'optimization' },
+  { path: '/admin/what-if', name: 'What-If Scenarios', module: 'optimization' },
+  { path: '/admin/emergency', name: 'Emergency Corridor', module: 'response' },
+  { path: '/admin/incidents', name: 'Incidents', module: 'response' },
+  { path: '/admin/analytics', name: 'Analytics', module: 'intelligence' },
+  { path: '/admin/reports', name: 'Reports', module: 'intelligence' },
+  { path: '/admin/cities', name: 'City Management', module: 'system' },
+  { path: '/admin/settings', name: 'Settings', module: 'system' },
 ];

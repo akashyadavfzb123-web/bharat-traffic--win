@@ -1,13 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import type { UserRole } from '../../types/auth';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import {
   Activity,
-  User,
-  Shield,
   Eye,
   EyeOff,
   Lock,
@@ -23,7 +20,6 @@ export const Register: React.FC = () => {
   const navigate = useNavigate();
   const { register, isLoading, error, clearError } = useAuth();
 
-  const [role, setRole] = useState<UserRole>('user');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,9 +60,9 @@ export const Register: React.FC = () => {
         email,
         password,
         confirmPassword,
-        role,
       });
 
+      // Navigate based on role from the backend (always 'user' for registration)
       if (createdUser.role === 'admin') {
         navigate('/admin/dashboard');
       } else {
@@ -99,56 +95,17 @@ export const Register: React.FC = () => {
           Create New Account
         </h1>
         <p className="text-xs text-slate-400 max-w-sm">
-          Register to unlock AI route planning or join the Municipal Traffic Control Command System.
+          Register to unlock AI route planning and citizen mobility features.
         </p>
       </div>
 
       {/* Card Form */}
       <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 relative z-10 backdrop-blur-md space-y-5">
-        {/* Role Selector Tabs */}
-        <div>
-          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2 font-mono">
-            Select Account Role
-          </label>
-          <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
-            <button
-              type="button"
-              onClick={() => {
-                setRole('user');
-                clearError();
-              }}
-              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
-                role === 'user'
-                  ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <User className="w-4 h-4" />
-              USER (Citizen)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRole('admin');
-                clearError();
-              }}
-              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
-                role === 'admin'
-                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Shield className="w-4 h-4" />
-              ADMIN (Control Room)
-            </button>
-          </div>
-        </div>
-
-        {/* Selected Role Badge Notice */}
+        {/* Role Badge Notice */}
         <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 text-xs">
-          <span className="text-slate-400">Selected Permission:</span>
-          <Badge color={role === 'admin' ? 'emerald' : 'cyan'} dot>
-            {role === 'admin' ? 'Traffic Administrator' : 'Citizen Mobility Account'}
+          <span className="text-slate-400">Account Type:</span>
+          <Badge color="cyan" dot>
+            Citizen Mobility Account
           </Badge>
         </div>
 
@@ -248,7 +205,7 @@ export const Register: React.FC = () => {
 
           <Button
             type="submit"
-            variant={role === 'admin' ? 'success' : 'primary'}
+            variant="primary"
             size="lg"
             isLoading={isLoading}
             className="w-full mt-2"

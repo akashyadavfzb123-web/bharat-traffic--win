@@ -6,6 +6,7 @@ from app.models.corridor import Corridor
 from app.models.road import Road, road_intersection
 from app.models.intersection import Intersection
 from app.models.traffic_signal import TrafficSignal
+from app.models.signal_optimization import SignalOptimization
 from app.models.incident import Incident
 from app.models.traffic_record import TrafficRecord
 from app.models.prediction import Prediction
@@ -24,6 +25,7 @@ __all__ = [
     "road_intersection",
     "Intersection",
     "TrafficSignal",
+    "SignalOptimization",
     "Incident",
     "TrafficRecord",
     "Prediction",

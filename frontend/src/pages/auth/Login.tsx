@@ -1,47 +1,28 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import type { UserRole } from '../../types/auth';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { ForgotPasswordModal } from '../../components/auth/ForgotPasswordModal';
 import {
   Activity,
-  User,
-  Shield,
   Eye,
   EyeOff,
   Lock,
   Mail,
   AlertCircle,
   ArrowRight,
-  Sparkles,
 } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
   const { login, isLoading, error, clearError } = useAuth();
 
-  const [role, setRole] = useState<UserRole>('user');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState('');
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
-
-  const handleRoleSelect = (selectedRole: UserRole) => {
-    setRole(selectedRole);
-    clearError();
-    setValidationError('');
-    // Quick autofill based on selected role
-    if (selectedRole === 'admin') {
-      setEmail('admin@trafficcontrol.gov.in');
-      setPassword('admin123');
-    } else {
-      setEmail('citizen@mobility.in');
-      setPassword('user123');
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,7 +43,8 @@ export const Login: React.FC = () => {
     }
 
     try {
-      const loggedUser = await login({ email, password, role });
+      const loggedUser = await login({ email, password });
+      // Navigate based on role from the backend
       if (loggedUser.role === 'admin') {
         navigate('/admin/dashboard');
       } else {
@@ -95,50 +77,17 @@ export const Login: React.FC = () => {
           Sign In to Portal
         </h1>
         <p className="text-xs text-slate-400 max-w-sm">
-          Select your portal role to access real-time citizen mobility advice or city control telemetry.
+          Access real-time citizen mobility advice or city control telemetry.
         </p>
       </div>
 
       {/* Card Form */}
       <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 relative z-10 backdrop-blur-md space-y-5">
-        {/* Role Selector Tabs */}
-        <div>
-          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2 font-mono">
-            1. Select Portal Role
-          </label>
-          <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
-            <button
-              type="button"
-              onClick={() => handleRoleSelect('user')}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all ${
-                role === 'user'
-                  ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <User className="w-4 h-4" />
-              USER (Citizen)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleRoleSelect('admin')}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold transition-all ${
-                role === 'admin'
-                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Shield className="w-4 h-4" />
-              ADMIN (Control Room)
-            </button>
-          </div>
-        </div>
-
-        {/* Selected Role Badge Notice */}
+        {/* Portal Mode Badge */}
         <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 text-xs">
-          <span className="text-slate-400">Target Experience:</span>
-          <Badge color={role === 'admin' ? 'emerald' : 'cyan'} dot>
-            {role === 'admin' ? 'Command Center' : 'Citizen Mobility'}
+          <span className="text-slate-400">Your role is determined by your account.</span>
+          <Badge color="cyan" dot>
+            Login Required
           </Badge>
         </div>
 
@@ -161,7 +110,7 @@ export const Login: React.FC = () => {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder={role === 'admin' ? 'admin@trafficcontrol.gov.in' : 'citizen@mobility.in'}
+              placeholder="Enter your email"
               className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
               required
             />
@@ -202,39 +151,15 @@ export const Login: React.FC = () => {
 
           <Button
             type="submit"
-            variant={role === 'admin' ? 'success' : 'primary'}
+            variant="primary"
             size="lg"
             isLoading={isLoading}
             className="w-full mt-2"
             rightIcon={<ArrowRight className="w-4 h-4" />}
           >
-            {role === 'admin' ? 'Access Control Command Room' : 'Access Citizen Dashboard'}
+            Sign In
           </Button>
         </form>
-
-        {/* Demo Quick Fill Hint */}
-        <div className="pt-3 border-t border-slate-800 text-center space-y-2">
-          <p className="text-[11px] text-slate-400 font-mono flex items-center justify-center gap-1">
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            Quick Demo Credentials Loaded
-          </p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => handleRoleSelect('user')}
-              className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-[10px] font-mono text-cyan-400"
-            >
-              Autofill USER
-            </button>
-            <button
-              type="button"
-              onClick={() => handleRoleSelect('admin')}
-              className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-[10px] font-mono text-emerald-400"
-            >
-              Autofill ADMIN
-            </button>
-          </div>
-        </div>
 
         {/* Register Redirect Link */}
         <div className="text-center pt-2 text-xs text-slate-400">

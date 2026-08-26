@@ -63,11 +63,13 @@ export const AppRoutes: React.FC = () => {
           <Route path="/admin/predictions" element={<AdminPredictions />} />
           <Route path="/admin/signal-optimization" element={<AdminSignalOptimization />} />
           <Route path="/admin/what-if" element={<AdminWhatIfScenarios />} />
-          <Route path="/admin/emergency-corridor" element={<AdminEmergencyCorridor />} />
+          <Route path="/admin/emergency" element={<AdminEmergencyCorridor />} />
+          <Route path="/admin/emergency-corridor" element={<Navigate to="/admin/emergency" replace />} />
           <Route path="/admin/incidents" element={<AdminIncidentManagement />} />
           <Route path="/admin/analytics" element={<AdminAnalytics />} />
           <Route path="/admin/reports" element={<AdminReports />} />
-          <Route path="/admin/city-management" element={<AdminCityManagement />} />
+          <Route path="/admin/cities" element={<AdminCityManagement />} />
+          <Route path="/admin/city-management" element={<Navigate to="/admin/cities" replace />} />
           <Route path="/admin/settings" element={<AdminSettings />} />
         </Route>
 
