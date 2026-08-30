@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MOCK_INCIDENTS,
   INCIDENT_TYPE_CONFIG,
@@ -11,6 +11,7 @@ import {
   type INCIDENT_STATUS,
 } from '../../mock/mockIncidents';
 import { useToast } from '../../context/ToastContext';
+import apiClient from '../../services/apiClient';
 import {
   AlertTriangle,
   Plus,
@@ -35,7 +36,54 @@ const STATUS_CONFIG: Record<INCIDENT_STATUS, { label: string; badge: string; col
 
 export const AdminIncidentManagement: React.FC = () => {
   const { addToast } = useToast();
-  const [incidents, setIncidents] = useState<IncidentData[]>(MOCK_INCIDENTS);
+  const [incidents, setIncidents] = useState<IncidentData[]>([]);
+  const [, setLoading] = useState(true);
+
+  // Fetch incidents from real backend on mount
+  useEffect(() => {
+    const fetchIncidents = async () => {
+      try {
+        const res = await apiClient.get('/incidents');
+        const data = res.data as any[];
+        if (data && data.length > 0) {
+          // Map backend severity to frontend severity
+          const severityMap: Record<string, IncidentSeverity> = { minor: 'low', low: 'low', medium: 'medium', moderate: 'medium', major: 'high', high: 'high', critical: 'critical' };
+          // Map backend incident_type to frontend type
+          const typeMap: Record<string, IncidentType> = { accident: 'accident', breakdown: 'breakdown', construction: 'construction', flood: 'flood', signal_failure: 'signal_failure', blockage: 'road_blockage' };
+          const statusMap: Record<string, INCIDENT_STATUS> = { active: 'reported', reported: 'reported', dispatched: 'dispatched', in_progress: 'in_progress', resolved: 'resolved' };
+          const mapped: IncidentData[] = data.map((inc: any) => ({
+            id: `inc-${inc.id}`,
+            type: (typeMap[inc.incident_type] || 'accident') as IncidentType,
+            title: inc.description || `${inc.incident_type} incident`,
+            severity: (severityMap[inc.severity] || 'medium') as IncidentSeverity,
+            status: (statusMap[inc.status] || 'reported') as INCIDENT_STATUS,
+            locationName: `Location ${inc.latitude?.toFixed(4) || 'N/A'}, ${inc.longitude?.toFixed(4) || 'N/A'}`,
+            lat: inc.latitude || 12.95,
+            lng: inc.longitude || 77.62,
+            affectedRoads: [],
+            impactedLanes: 1,
+            estimatedDelayMin: inc.severity === 'critical' ? 30 : inc.severity === 'high' ? 20 : 15,
+            estimatedCongestionIncreasePct: inc.severity === 'critical' ? 25 : inc.severity === 'high' ? 15 : 10,
+            vehiclesImpacted: inc.severity === 'critical' ? 500 : inc.severity === 'high' ? 200 : 100,
+            description: inc.description || '',
+            recommendedAction: getDefaultRecommendedAction(inc.incident_type || 'accident'),
+            dispatchedUnits: [],
+            reportedAt: inc.reported_at ? new Date(inc.reported_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) : 'Unknown',
+            reportedBy: 'System',
+            lastUpdated: inc.updated_at ? new Date(inc.updated_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) : 'Unknown',
+          }));
+          setIncidents(mapped);
+        } else {
+          setIncidents([...MOCK_INCIDENTS]);
+        }
+      } catch {
+        setIncidents([...MOCK_INCIDENTS]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchIncidents();
+  }, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [filterType, setFilterType] = useState<IncidentType | 'all'>('all');
@@ -67,39 +115,79 @@ export const AdminIncidentManagement: React.FC = () => {
   };
 
   // Actions
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!newTitle || !newLocation) return;
-    const inc: IncidentData = {
-      id: getNextIncidentId(),
-      type: newType,
-      title: newTitle,
-      severity: newSeverity,
-      status: 'reported',
-      locationName: newLocation,
-      lat: 12.95,
-      lng: 77.62,
-      affectedRoads: newRoads.split(',').map((r) => r.trim()).filter(Boolean),
-      impactedLanes: 1,
-      estimatedDelayMin: 15,
-      estimatedCongestionIncreasePct: 10,
-      vehiclesImpacted: 100,
-      description: newDescription,
-      recommendedAction: getDefaultRecommendedAction(newType),
-      dispatchedUnits: [],
-      reportedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      reportedBy: 'Manual Entry',
-      lastUpdated: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
-    };
-    setIncidents([inc, ...incidents]);
+    try {
+      const res = await apiClient.post('/incidents', {
+        city_id: 1,
+        incident_type: newType,
+        severity: newSeverity,
+        description: newDescription || newTitle,
+        latitude: 12.95,
+        longitude: 77.62,
+      });
+      const created = res.data as any;
+      const inc: IncidentData = {
+        id: `inc-${created.id}`,
+        type: newType,
+        title: newTitle,
+        severity: newSeverity,
+        status: 'reported',
+        locationName: newLocation,
+        lat: created.latitude || 12.95,
+        lng: created.longitude || 77.62,
+        affectedRoads: newRoads.split(',').map((r) => r.trim()).filter(Boolean),
+        impactedLanes: 1,
+        estimatedDelayMin: 15,
+        estimatedCongestionIncreasePct: 10,
+        vehiclesImpacted: 100,
+        description: newDescription,
+        recommendedAction: getDefaultRecommendedAction(newType),
+        dispatchedUnits: [],
+        reportedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        reportedBy: 'Admin',
+        lastUpdated: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      };
+      setIncidents([inc, ...incidents]);
+      addToast({ type: 'success', title: 'Incident Created (Backend)', message: `${inc.title} — ${inc.severity} severity`, duration: 4000 });
+    } catch {
+      const inc: IncidentData = {
+        id: getNextIncidentId(),
+        type: newType,
+        title: newTitle,
+        severity: newSeverity,
+        status: 'reported',
+        locationName: newLocation,
+        lat: 12.95,
+        lng: 77.62,
+        affectedRoads: newRoads.split(',').map((r) => r.trim()).filter(Boolean),
+        impactedLanes: 1,
+        estimatedDelayMin: 15,
+        estimatedCongestionIncreasePct: 10,
+        vehiclesImpacted: 100,
+        description: newDescription,
+        recommendedAction: getDefaultRecommendedAction(newType),
+        dispatchedUnits: [],
+        reportedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        reportedBy: 'Manual Entry',
+        lastUpdated: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      };
+      setIncidents([inc, ...incidents]);
+      addToast({ type: 'success', title: 'Incident Created (Local)', message: `${inc.title} — ${inc.severity} severity`, duration: 4000 });
+    }
     setShowCreateForm(false);
     setNewTitle('');
     setNewLocation('');
     setNewDescription('');
     setNewRoads('');
-    addToast({ type: 'success', title: 'Incident Created', message: `${inc.title} — ${inc.severity} severity`, duration: 4000 });
   };
 
-  const handleUpdateStatus = (id: string, newStatus: INCIDENT_STATUS) => {
+  const handleUpdateStatus = async (id: string, newStatus: INCIDENT_STATUS) => {
+    // Try to update via backend PATCH
+    const numericId = id.replace('inc-', '');
+    try {
+      await apiClient.patch(`/incidents/${numericId}`, { status: newStatus });
+    } catch { /* proceed with local update */ }
     setIncidents((prev) =>
       prev.map((i) => (i.id === id ? { ...i, status: newStatus, lastUpdated: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) } : i))
     );
@@ -243,9 +331,9 @@ export const AdminIncidentManagement: React.FC = () => {
         {/* Incident List */}
         <div className="lg:col-span-2 space-y-2">
           {filtered.map((inc) => {
-            const typeCfg = INCIDENT_TYPE_CONFIG[inc.type];
-            const statusCfg = STATUS_CONFIG[inc.status];
-            const sevCfg = SEVERITY_CONFIG[inc.severity];
+            const typeCfg = INCIDENT_TYPE_CONFIG[inc.type] || { icon: '⚠️', label: inc.type };
+            const statusCfg = STATUS_CONFIG[inc.status] || { label: inc.status, badge: 'bg-slate-800 text-slate-400 border-slate-700', color: 'slate' };
+            const sevCfg = SEVERITY_CONFIG[inc.severity] || { label: inc.severity, badge: 'bg-slate-800 text-slate-400 border-slate-700' };
             return (
               <button
                 key={inc.id}
@@ -307,8 +395,8 @@ export const AdminIncidentManagement: React.FC = () => {
               <div className="p-4 space-y-3 max-h-[600px] overflow-y-auto">
                 {/* Status & Severity */}
                 <div className="flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${STATUS_CONFIG[selected.status].badge}`}>{STATUS_CONFIG[selected.status].label.toUpperCase()}</span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${SEVERITY_CONFIG[selected.severity].badge}`}>{selected.severity.toUpperCase()}</span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${STATUS_CONFIG[selected.status]?.badge || 'bg-slate-800 text-slate-400 border-slate-700'}`}>{STATUS_CONFIG[selected.status]?.label?.toUpperCase() || selected.status.toUpperCase()}</span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${SEVERITY_CONFIG[selected.severity]?.badge || 'bg-slate-800 text-slate-400 border-slate-700'}`}>{selected.severity.toUpperCase()}</span>
                 </div>
 
                 {/* Location */}

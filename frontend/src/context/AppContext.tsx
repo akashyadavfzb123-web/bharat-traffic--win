@@ -14,7 +14,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [role, setRole] = useState<UserRole>('admin'); // Default to admin for command center view
+  const [role, setRole] = useState<UserRole>('user'); // Default to user; sync with auth on login
   const [selectedCity, setSelectedCity] = useState<string>('Bengaluru');
   const [isSimulating, setIsSimulating] = useState<boolean>(true);
 

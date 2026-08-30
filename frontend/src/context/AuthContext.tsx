@@ -152,7 +152,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       localStorage.setItem('bharat_traffic_token', tokenResponse.access_token);
 
-      const authUser = toAuthUser(tokenResponse.user);
+      // Fetch user profile (backend login may not include user object)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let userData: any = (tokenResponse as any).user;
+      if (!userData) {
+        const meResponse = await authApi.getMe();
+        userData = meResponse;
+      }
+      const authUser = toAuthUser(userData);
       setUser(authUser);
       setRoleState(authUser.role);
       setIsLoading(false);

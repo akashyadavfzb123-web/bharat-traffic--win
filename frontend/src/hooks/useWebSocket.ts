@@ -1,0 +1,208 @@
+/**
+ * useWebSocket — connects to /ws/traffic for live data with REST fallback.
+ *
+ * If the WebSocket connection fails or drops, automatically falls back
+ * to polling GET /api/traffic/live at the same interval.
+ *
+ * Returns:
+ *   - data: the latest traffic snapshot (or null)
+ *   - connected: whether the WebSocket is currently connected
+ *   - mode: 'websocket' | 'rest' | 'disconnected'
+ */
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import apiClient from '../services/apiClient';
+
+export interface TrafficSnapshot {
+  type: string;
+  timestamp: number;
+  vehicles: Record<string, number>;
+  speed: Record<string, number>;
+  congestion: Record<string, string>;
+  queue: Record<string, number>;
+  signals: Array<{
+    id: number;
+    intersection_id: number;
+    intersection_name: string;
+    signal_type: string;
+    cycle_time_seconds: number;
+    is_active: boolean;
+    phases: any;
+  }>;
+  incidents: Array<{
+    id: number;
+    incident_type: string;
+    severity: string;
+    status: string;
+    description: string;
+    latitude: number;
+    longitude: number;
+    road_id: number;
+    intersection_id: number;
+  }>;
+  simulation: {
+    id: number;
+    name: string;
+    scenario_type: string;
+    status: string;
+    started_at: string;
+  } | null;
+  summary: {
+    total_vehicles: number;
+    avg_speed_kmph: number;
+    congestion_breakdown: Record<string, number>;
+    active_incidents: number;
+    active_signals: number;
+  };
+}
+
+type ConnectionMode = 'websocket' | 'rest' | 'disconnected';
+
+const WS_RECONNECT_DELAY = 3000;
+const REST_POLL_INTERVAL = 5000;
+
+export function useWebSocket() {
+  const [data, setData] = useState<TrafficSnapshot | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [mode, setMode] = useState<ConnectionMode>('disconnected');
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+
+  // Get WebSocket URL
+  const getWsUrl = useCallback(() => {
+    const token = localStorage.getItem('bharat_traffic_token');
+    const base = import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000';
+    return `${base}/ws/traffic?token=${token || ''}`;
+  }, []);
+
+  // REST fallback poll
+  const startRestPolling = useCallback(() => {
+    if (restTimer.current) clearInterval(restTimer.current);
+    setMode('rest');
+
+    const poll = async () => {
+      try {
+        const response = await apiClient.get('/traffic/live');
+        const d = response.data;
+        // Transform REST response to match WebSocket format
+        const snapshot: TrafficSnapshot = {
+          type: 'traffic_update',
+          timestamp: Date.now(),
+          vehicles: {},
+          speed: {},
+          congestion: {},
+          queue: {},
+          signals: [],
+          incidents: d.top_congested_roads?.map((r: any) => ({
+            id: r.id,
+            incident_type: 'unknown',
+            severity: 'low',
+            status: 'reported',
+            description: r.name,
+            latitude: 0,
+            longitude: 0,
+            road_id: r.id,
+            intersection_id: 0,
+          })) || [],
+          simulation: null,
+          summary: {
+            total_vehicles: d.total_vehicles_tracked || 0,
+            avg_speed_kmph: d.avg_speed_kmph || 0,
+            congestion_breakdown: d.congestion_breakdown || {},
+            active_incidents: d.active_incidents || 0,
+            active_signals: d.total_signals || 0,
+          },
+        };
+        if (mountedRef.current) {
+          setData(snapshot);
+          setConnected(true);
+        }
+      } catch {
+        if (mountedRef.current) setConnected(false);
+      }
+    };
+
+    poll();
+    restTimer.current = setInterval(poll, REST_POLL_INTERVAL);
+  }, []);
+
+  // Connect WebSocket
+  const connectWs = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+
+    try {
+      const ws = new WebSocket(getWsUrl());
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (mountedRef.current) {
+          setConnected(true);
+          setMode('websocket');
+          // Stop REST polling if it was running
+          if (restTimer.current) {
+            clearInterval(restTimer.current);
+            restTimer.current = null;
+          }
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const snapshot = JSON.parse(event.data) as TrafficSnapshot;
+          if (mountedRef.current) {
+            setData(snapshot);
+          }
+        } catch {
+          // Ignore malformed messages
+        }
+      };
+
+      ws.onclose = () => {
+        if (mountedRef.current) {
+          setConnected(false);
+          setMode('disconnected');
+          // Fall back to REST
+          startRestPolling();
+          // Try to reconnect WebSocket after delay
+          reconnectTimer.current = setTimeout(connectWs, WS_RECONNECT_DELAY);
+        }
+      };
+
+      ws.onerror = () => {
+        // onclose will handle fallback
+        ws.close();
+      };
+
+      // Ping to keep alive
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('ping');
+        }
+      }, 30000);
+
+      ws.addEventListener('close', () => clearInterval(pingInterval));
+    } catch {
+      // Fall back to REST immediately
+      startRestPolling();
+    }
+  }, [getWsUrl, startRestPolling]);
+
+  // Mount: try WebSocket, fallback to REST
+  useEffect(() => {
+    mountedRef.current = true;
+    connectWs();
+
+    return () => {
+      mountedRef.current = false;
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (restTimer.current) clearInterval(restTimer.current);
+    };
+  }, [connectWs]);
+
+  return { data, connected, mode };
+}

@@ -12,6 +12,7 @@ import {
   Mail,
   AlertCircle,
   ArrowRight,
+  Zap,
 } from 'lucide-react';
 
 export const Login: React.FC = () => {
@@ -160,6 +161,40 @@ export const Login: React.FC = () => {
             Sign In
           </Button>
         </form>
+
+        {/* Quick Demo Access */}
+        <div className="pt-2 space-y-3">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-700/50" />
+            </div>
+            <div className="relative flex justify-center text-[10px]">
+              <span className="px-2 bg-slate-900 text-slate-500 font-mono">QUICK ACCESS</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              setEmail('user@demo.com');
+              setPassword('password');
+              try {
+                const loggedUser = await login({ email: 'user@demo.com', password: 'password' });
+                if (loggedUser.role === 'admin') {
+                  navigate('/admin/dashboard');
+                } else {
+                  navigate('/user/dashboard');
+                }
+              } catch {
+                // Error handled by AuthContext
+              }
+            }}
+            disabled={isLoading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600/20 to-cyan-600/20 border border-emerald-500/30 rounded-xl text-xs font-mono text-emerald-300 hover:from-emerald-600/30 hover:to-cyan-600/30 hover:border-emerald-400/50 transition-all disabled:opacity-50"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            Demo Admin Login
+          </button>
+        </div>
 
         {/* Register Redirect Link */}
         <div className="text-center pt-2 text-xs text-slate-400">

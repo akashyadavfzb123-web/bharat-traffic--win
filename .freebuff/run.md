@@ -11,16 +11,15 @@
 ## How to run the server
 ```bash
 cd frontend
-npm run dev -- --port 5173
+npm run dev -- --port 5174
 ```
 Vite proxies `/api` requests to `http://localhost:8000` via the proxy config in `vite.config.ts`.
 
 ## Environment
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5174
 - Backend: http://localhost:8000
 - API base: http://localhost:8000/api
 
 ## Preview
-- Port: 5173
-- URL: http://localhost:5173
-- PID: 54000 (pre-existing Vite dev server)
+- Port: 5174
+- URL: http://localhost:5174

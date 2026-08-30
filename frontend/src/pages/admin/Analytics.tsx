@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRealtime } from '../../context/RealtimeContext';
+import { analyticsService } from '../../services/api';
 import { BarChart3, TrendingUp, Clock, Leaf } from 'lucide-react';
 import {
   BarChart,
@@ -62,6 +63,27 @@ const SIGNAL_EFFICIENCY = [
 export const AdminAnalytics: React.FC = () => {
   const { snapshot } = useRealtime();
   const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
+  const [realOverview, setRealOverview] = useState<any>(null);
+  const [realTraffic, setRealTraffic] = useState<any>(null);
+  const [realSignals, setRealSignals] = useState<any>(null);
+  const [, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [overview, traffic, signals] = await Promise.all([
+          analyticsService.getOverview(),
+          analyticsService.getTraffic(),
+          analyticsService.getSignals(),
+        ]);
+        if (overview) setRealOverview(overview);
+        if (traffic) setRealTraffic(traffic);
+        if (signals) setRealSignals(signals);
+      } catch { /* use hardcoded fallback */ }
+      finally { setDataLoading(false); }
+    };
+    fetchData();
+  }, []);
 
   return (
     <div className="p-6 space-y-6">
@@ -97,9 +119,9 @@ export const AdminAnalytics: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl border bg-gradient-to-br from-cyan-500/10 to-cyan-500/5 text-cyan-400 border-cyan-500/20 shadow-lg flex items-center justify-between">
           <div>
-            <p className="text-xs text-slate-400">Total Vehicles Today</p>
-            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{(snapshot.cityStats.totalVehiclesTracked * 3.2).toLocaleString()}</h3>
-            <p className="text-[11px] mt-1 font-semibold text-emerald-400">+12% vs yesterday</p>
+            <p className="text-xs text-slate-400">Total Vehicles Tracked</p>
+            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{realOverview?.total_vehicles_tracked?.toLocaleString() || (snapshot.cityStats.totalVehiclesTracked * 3.2).toLocaleString()}</h3>
+            <p className="text-[11px] mt-1 font-semibold text-emerald-400">{realOverview ? 'From API' : '+12% vs yesterday'}</p>
           </div>
           <div className="p-3 rounded-xl bg-cyan-500/20 text-cyan-400">
             <BarChart3 className="w-6 h-6" />
@@ -108,9 +130,9 @@ export const AdminAnalytics: React.FC = () => {
 
         <div className="p-4 rounded-xl border bg-gradient-to-br from-amber-500/10 to-amber-500/5 text-amber-400 border-amber-500/20 shadow-lg flex items-center justify-between">
           <div>
-            <p className="text-xs text-slate-400">Avg Wait Time</p>
-            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{Math.round(snapshot.junctions.reduce((s, j) => s + j.currentWaitTimeSec, 0) / snapshot.junctions.length)}s</h3>
-            <p className="text-[11px] mt-1 font-semibold text-amber-400">Across {snapshot.junctions.length} junctions</p>
+            <p className="text-xs text-slate-400">Avg Speed</p>
+            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{realOverview?.avg_speed_kmph || realTraffic?.avg_speed_kmph || Math.round(snapshot.junctions.reduce((s, j) => s + j.currentWaitTimeSec, 0) / (snapshot.junctions.length || 1))} {realOverview || realTraffic ? 'km/h' : 's'}</h3>
+            <p className="text-[11px] mt-1 font-semibold text-amber-400">Across {realOverview?.total_roads || snapshot.junctions.length} {realOverview ? 'roads' : 'junctions'}</p>
           </div>
           <div className="p-3 rounded-xl bg-amber-500/20 text-amber-400">
             <Clock className="w-6 h-6" />
@@ -119,9 +141,9 @@ export const AdminAnalytics: React.FC = () => {
 
         <div className="p-4 rounded-xl border bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 text-emerald-400 border-emerald-500/20 shadow-lg flex items-center justify-between">
           <div>
-            <p className="text-xs text-slate-400">Signal Efficiency</p>
-            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">94%</h3>
-            <p className="text-[11px] mt-1 font-semibold text-emerald-400">Adaptive AI mode</p>
+            <p className="text-xs text-slate-400">Active Signals</p>
+            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{realSignals?.active_signals || realOverview?.total_signals || 94}</h3>
+            <p className="text-[11px] mt-1 font-semibold text-emerald-400">{realSignals ? `${realSignals.total_signals} total` : 'Adaptive AI mode'}</p>
           </div>
           <div className="p-3 rounded-xl bg-emerald-500/20 text-emerald-400">
             <TrendingUp className="w-6 h-6" />
@@ -130,9 +152,9 @@ export const AdminAnalytics: React.FC = () => {
 
         <div className="p-4 rounded-xl border bg-gradient-to-br from-purple-500/10 to-purple-500/5 text-purple-400 border-purple-500/20 shadow-lg flex items-center justify-between">
           <div>
-            <p className="text-xs text-slate-400">Daily CO₂ Emissions</p>
-            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{snapshot.cityStats.dailyEmissionsTonnes}t</h3>
-            <p className="text-[11px] mt-1 font-semibold text-purple-400">-4.2% with AI routing</p>
+            <p className="text-xs text-slate-400">Active Incidents</p>
+            <h3 className="text-2xl font-bold text-slate-100 mt-1 font-mono">{realOverview?.active_incidents ?? snapshot.cityStats.activeIncidents}</h3>
+            <p className="text-[11px] mt-1 font-semibold text-purple-400">{realOverview ? `${realOverview.total_predictions} predictions` : '-4.2% with AI routing'}</p>
           </div>
           <div className="p-3 rounded-xl bg-purple-500/20 text-purple-400">
             <Leaf className="w-6 h-6" />

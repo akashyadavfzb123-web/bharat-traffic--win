@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { trafficService } from '../../services/api';
 import type { Incident } from '../../types/traffic';
+import { useRealtime } from '../../context/RealtimeContext';
 import { MOCK_ROAD_GEOJSON } from '../../data/mockGeoJSON';
 import type { RoadSegmentProperties } from '../../data/mockGeoJSON';
 import { MapContainer } from '../../components/common/MapContainer';
@@ -21,6 +22,7 @@ import {
 import { Link } from 'react-router-dom';
 
 export const UserLiveTraffic: React.FC = () => {
+  const { wsConnected, wsMode } = useRealtime();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [selectedRoad, setSelectedRoad] = useState<RoadSegmentProperties | null>(
     MOCK_ROAD_GEOJSON.features[0].properties
@@ -50,6 +52,9 @@ export const UserLiveTraffic: React.FC = () => {
             </h2>
             <Badge color="cyan" dot>
               GeoJSON Vector Layer
+            </Badge>
+            <Badge color={wsConnected ? 'emerald' : 'amber'} dot>
+              {wsMode === 'websocket' ? 'Live WS' : wsMode === 'rest' ? 'REST Poll' : 'Offline'}
             </Badge>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">

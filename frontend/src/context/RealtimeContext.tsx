@@ -13,6 +13,7 @@ import {
   MOCK_DIGITAL_TWIN_NODES,
   INITIAL_CITY_STATS,
 } from '../mock/mockTrafficData';
+import { useWebSocket, type TrafficSnapshot } from '../hooks/useWebSocket';
 
 export type SimulationSpeed = 'realtime' | 'fast' | 'paused';
 
@@ -35,6 +36,10 @@ interface RealtimeContextType {
   refreshJunctions: () => void;
   updateJunctionInSnapshot: (id: string, updates: Partial<Junction>) => void;
   updateCorridorInSnapshot: (id: string, updates: Partial<EmergencyCorridor>) => void;
+  // WebSocket state
+  wsConnected: boolean;
+  wsMode: 'websocket' | 'rest' | 'disconnected';
+  wsData: TrafficSnapshot | null;
 }
 
 const RealtimeContext = createContext<RealtimeContextType | undefined>(undefined);
@@ -53,7 +58,7 @@ function mutateJunction(j: Junction): Junction {
   const newCongestion = fluctuateInt(j.congestionIndex, 3, 10, 98);
   const newWait = fluctuateInt(j.currentWaitTimeSec, 5, 15, 240);
   const newVehicleCount = fluctuateInt(j.vehicleCount, 30, 80, 2000);
-  const newSpeed = fluctuate(j.avgSpeedKmh ?? 24, 2, 5, 60);
+  const newSpeed = fluctuate((j as any).avgSpeedKmh ?? 24, 2, 5, 60);
 
   let newStatus: Junction['status'] = 'green';
   if (newCongestion >= 85) newStatus = 'critical';
@@ -68,11 +73,10 @@ function mutateJunction(j: Junction): Junction {
     avgSpeedKmh: newSpeed,
     status: newStatus,
     lastUpdated: 'Just now',
-  };
+  } as Junction;
 }
 
 function mutateIncident(inc: Incident): Incident {
-  // Occasionally advance status
   const shouldProgress = Math.random() < 0.05;
   let newStatus = inc.status;
   if (shouldProgress) {
@@ -94,28 +98,16 @@ function mutateDigitalTwinNode(node: DigitalTwinNode): DigitalTwinNode {
   };
 }
 
-// Add avgSpeedKmh to Junction if missing (it's not in the type but we use it in simulation)
-function getJunctionSpeed(j: Junction): number {
-  return (j as Junction & { avgSpeedKmh?: number }).avgSpeedKmh ?? 24;
-}
-
 function buildInitialSnapshot(): TelemetrySnapshot {
   return {
     timestamp: Date.now(),
     junctions: MOCK_JUNCTIONS.map((j) => ({ ...j })),
-    incidents: MOCK_INCIDENTS.map((i) => ({ i, ...i })),
+    incidents: MOCK_INCIDENTS.map((i) => ({ ...i })),
     emergencyCorridors: MOCK_EMERGENCY_CORRIDORS.map((c) => ({ ...c })),
     digitalTwinNodes: MOCK_DIGITAL_TWIN_NODES.map((n) => ({ ...n })),
     cityStats: { ...INITIAL_CITY_STATS },
     tickCount: 0,
   };
-}
-
-// We need to extend Junction with avgSpeedKmh for simulation
-declare module '../types/traffic' {
-  interface Junction {
-    avgSpeedKmh?: number;
-  }
 }
 
 const TICK_INTERVAL: Record<SimulationSpeed, number> = {
@@ -130,6 +122,86 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [speed, setSpeed] = useState<SimulationSpeed>('realtime');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // WebSocket connection with REST fallback
+  const { data: wsData, connected: wsConnected, mode: wsMode } = useWebSocket();
+
+  // Merge WebSocket data into snapshot when available
+  useEffect(() => {
+    if (!wsData) return;
+
+    setSnapshot((prev) => {
+      // Map WebSocket signals to junctions
+      const wsJunctions: Junction[] = wsData.signals.map((sig) => {
+        const speed = Object.values(wsData.speed)[0] || 24;
+        const vehicleCount = Object.values(wsData.vehicles).reduce((a, b) => a + b, 0);
+        const congestionValues = Object.values(wsData.congestion);
+        const worstCongestion = congestionValues.length > 0
+          ? Math.max(...Object.keys(wsData.summary.congestion_breakdown).map((k) => {
+              const levels: Record<string, number> = { free_flow: 0, moderate: 1, slow: 2, congested: 3, gridlock: 4 };
+              return (levels[k] || 0) * (wsData.summary.congestion_breakdown[k] || 0);
+            }))
+          : 0;
+        const congestionIndex = Math.min(100, Math.round((worstCongestion / Math.max(vehicleCount, 1)) * 100));
+
+        let status: Junction['status'] = 'green';
+        if (congestionIndex >= 85) status = 'critical';
+        else if (congestionIndex >= 65) status = 'red';
+        else if (congestionIndex >= 40) status = 'yellow';
+
+        return {
+          id: `j-${sig.intersection_id}`,
+          name: sig.intersection_name || `Signal ${sig.id}`,
+          city: 'Bengaluru',
+          lat: 0,
+          lng: 0,
+          status,
+          currentWaitTimeSec: sig.cycle_time_seconds || 90,
+          vehicleCount: Math.round(vehicleCount / Math.max(wsData.signals.length, 1)),
+          congestionIndex: Math.round(congestionIndex / Math.max(wsData.signals.length, 1)),
+          signalMode: (sig.signal_type as any) || 'adaptive',
+          cycleLengthSec: sig.cycle_time_seconds || 90,
+          activePhase: (sig.phases as any)?.active_phase || 'Standard Phase',
+          lastUpdated: 'Just now',
+          avgSpeedKmh: speed,
+        } as Junction;
+      });
+
+      // Map WebSocket incidents
+      const wsIncidents: Incident[] = wsData.incidents.map((inc) => ({
+        id: `inc-${inc.id}`,
+        title: inc.description || `${inc.incident_type} incident`,
+        type: inc.incident_type as Incident['type'],
+        severity: inc.severity as Incident['severity'],
+        status: inc.status as Incident['status'],
+        locationName: `Location ${inc.latitude?.toFixed(4)}, ${inc.longitude?.toFixed(4)}`,
+        lat: inc.latitude || 0,
+        lng: inc.longitude || 0,
+        reportedAt: 'Just now',
+        description: inc.description || '',
+        impactedLanes: 1,
+        estimatedDelayMin: inc.severity === 'critical' ? 30 : inc.severity === 'high' ? 20 : 10,
+      }));
+
+      // Update city stats from WS summary
+      const newCityStats: CitySummaryStats = {
+        ...prev.cityStats,
+        totalVehiclesTracked: wsData.summary.total_vehicles,
+        avgCitySpeedKmh: wsData.summary.avg_speed_kmph,
+        activeIncidents: wsData.summary.active_incidents,
+      };
+
+      return {
+        ...prev,
+        timestamp: wsData.timestamp,
+        junctions: wsJunctions.length > 0 ? wsJunctions : prev.junctions,
+        incidents: wsIncidents.length > 0 ? wsIncidents : prev.incidents,
+        cityStats: newCityStats,
+        tickCount: prev.tickCount + 1,
+      };
+    });
+  }, [wsData]);
+
+  // Local simulation tick (runs when no WS or as supplement)
   const tick = useCallback(() => {
     setSnapshot((prev) => {
       const newJunctions = prev.junctions.map(mutateJunction);
@@ -142,7 +214,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         );
       const avgSpeed =
         Math.round(
-          (newJunctions.reduce((sum, j) => sum + getJunctionSpeed(j), 0) / newJunctions.length) * 10
+          (newJunctions.reduce((sum, j) => sum + ((j as any).avgSpeedKmh ?? 24), 0) / newJunctions.length) * 10
         ) / 10;
 
       const newCityStats: CitySummaryStats = {
@@ -164,15 +236,18 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   }, []);
 
-  // Interval management
+  // Interval management — only run local sim if WS is not connected
   useEffect(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
 
-    if (isRunning && speed !== 'paused') {
-      intervalRef.current = setInterval(tick, TICK_INTERVAL[speed]);
+    // If WebSocket is providing data, reduce local tick frequency
+    const effectiveInterval = wsConnected ? TICK_INTERVAL[speed] * 2 : TICK_INTERVAL[speed];
+
+    if (isRunning && speed !== 'paused' && effectiveInterval > 0) {
+      intervalRef.current = setInterval(tick, effectiveInterval);
     }
 
     return () => {
@@ -180,7 +255,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         clearInterval(intervalRef.current);
       }
     };
-  }, [isRunning, speed, tick]);
+  }, [isRunning, speed, tick, wsConnected]);
 
   const toggleSimulation = useCallback(() => {
     setIsRunning((prev) => !prev);
@@ -223,6 +298,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         refreshJunctions,
         updateJunctionInSnapshot,
         updateCorridorInSnapshot,
+        wsConnected,
+        wsMode,
+        wsData,
       }}
     >
       {children}

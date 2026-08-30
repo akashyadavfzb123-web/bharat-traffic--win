@@ -27,7 +27,7 @@ type InspectorTarget =
   | null;
 
 export const AdminLiveTraffic: React.FC = () => {
-  const { snapshot } = useRealtime();
+  const { snapshot, wsConnected, wsMode } = useRealtime();
   const [junctions, setJunctions] = useState<Junction[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'critical' | 'adaptive'>('all');
@@ -134,6 +134,20 @@ export const AdminLiveTraffic: React.FC = () => {
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
             </span>
             <span className="text-[9px] font-mono font-bold text-emerald-400">TICK #{snapshot.tickCount}</span>
+          </div>
+
+          {/* WebSocket status */}
+          <div className={`flex items-center gap-1.5 px-2 py-1 bg-slate-900 border rounded-lg ${
+            wsConnected ? 'border-emerald-500/30' : 'border-amber-500/30'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              wsConnected ? 'bg-emerald-400' : 'bg-amber-400'
+            }`} />
+            <span className={`text-[9px] font-mono font-bold ${
+              wsConnected ? 'text-emerald-400' : 'text-amber-400'
+            }`}>{
+              wsMode === 'websocket' ? 'WS LIVE' : wsMode === 'rest' ? 'REST' : 'OFFLINE'
+            }</span>
           </div>
 
           {/* Quick summary */}

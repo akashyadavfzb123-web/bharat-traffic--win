@@ -47,9 +47,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
     navigate('/login');
   };
 
-  // Sync app role with auth user role
+  // Sync app role with auth user role on login/logout
+  const prevUserRef = React.useRef(user);
   React.useEffect(() => {
-    if (user && user.role !== role) {
+    const prevUser = prevUserRef.current;
+    prevUserRef.current = user;
+    // On fresh login (new user), sync backend role to app
+    if (user && (!prevUser || prevUser.id !== user.id)) {
       setRole(user.role);
     }
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
