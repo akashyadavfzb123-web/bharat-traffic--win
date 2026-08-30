@@ -1,4 +1,9 @@
-"""Schemas for What-If simulation API."""
+"""Schemas for What-If simulation API.
+
+Supports both deterministic and SUMO backends.  The response format is
+identical regardless of backend — the frontend never needs to know which
+engine produced the results.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,13 @@ class ScenarioType(str, Enum):
     VIP_MOVEMENT = "vip_movement"
 
 
+# ── Simulation backend ───────────────────────────────────────────────
+
+class SimulationBackend(str, Enum):
+    DETERMINISTIC = "deterministic"
+    SUMO = "sumo"
+
+
 # ── Request schemas ───────────────────────────────────────────────────
 
 class SimulationCreate(BaseModel):
@@ -28,6 +40,7 @@ class SimulationCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     scenario_type: ScenarioType
     parameters: dict | None = None  # scenario-specific params (road_id, intersection_id, etc.)
+    backend: SimulationBackend = SimulationBackend.DETERMINISTIC
 
 
 # ── Response schemas ──────────────────────────────────────────────────
@@ -49,15 +62,26 @@ class SimulationOut(BaseModel):
 
 
 class RoadSimResult(BaseModel):
-    """Simulation result for a single road."""
+    """Simulation result for a single road — before/after comparison."""
     road_id: int
     road_name: str
+    # Before (from DB traffic records)
     original_speed_kmph: float
-    simulated_speed_kmph: float
     original_vehicles: int
-    simulated_vehicles: int
     original_congestion: str
+    original_waiting_time: float = 0.0
+    original_queue_length: int = 0
+    original_throughput: int = 0
+    original_travel_time: float = 0.0
+    # After (from SUMO or deterministic)
+    simulated_speed_kmph: float
+    simulated_vehicles: int
     simulated_congestion: str
+    simulated_waiting_time: float = 0.0
+    simulated_queue_length: int = 0
+    simulated_throughput: int = 0
+    simulated_travel_time: float = 0.0
+    # Delta metrics
     queue_change_pct: float
     travel_time_change_pct: float
 
@@ -70,6 +94,16 @@ class SimulationSummary(BaseModel):
     worst_road_name: str
     worst_speed_reduction_pct: float
     scenario_description: str
+    simulation_backend: str = "deterministic"
+    # Aggregate before/after
+    avg_waiting_time_before: float = 0.0
+    avg_waiting_time_after: float = 0.0
+    avg_queue_before: float = 0.0
+    avg_queue_after: float = 0.0
+    total_throughput_before: int = 0
+    total_throughput_after: int = 0
+    avg_travel_time_before: float = 0.0
+    avg_travel_time_after: float = 0.0
 
 
 class SimulationResultOut(BaseModel):

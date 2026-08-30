@@ -9,11 +9,20 @@ the model lacks geometry (Road, Zone, Corridor) ``geometry`` is ``null``
 and the frontend infers placement from connection data.
 
 City selection is dynamic via the ``city_id`` query parameter.
+
+Stage 36 adds ``POST /api/digital-twin/simulate`` which runs a SUMO
+simulation on the current digital twin state and returns the simulated
+traffic state (vehicles, speed, queue, congestion, travel time).
 """
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
+
+from app.schemas.digital_twin_sumo import (
+    DigitalTwinSimRequest,
+    DigitalTwinSimResult,
+)
 
 from app.api.deps import get_current_user
 from app.api.traffic import _estimate_queue, _latest_record
@@ -274,3 +283,38 @@ def list_signals(
             phases=sig.phases,
         ))
     return GeoJSONFeatureCollection(features=features)
+
+
+# ── POST /api/digital-twin/simulate ──────────────────────────────────
+
+@router.post("/simulate", response_model=DigitalTwinSimResult)
+def simulate_digital_twin(
+    body: DigitalTwinSimRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Run a SUMO simulation on the current digital twin traffic state.
+
+    Reads live traffic data from the DB, generates a SUMO network,
+    runs the simulation, and returns the simulated traffic state:
+
+    - vehicles (per road)
+    - speed (per road)
+    - queue length (per road)
+    - congestion level (per road)
+    - travel time (per road)
+
+    When SUMO is not installed, returns a deterministic estimate so
+    the frontend keeps working.
+    """
+    from app.services.digital_twin_sumo import run_digital_twin_sumo
+
+    result = run_digital_twin_sumo(
+        db,
+        city_id=body.city_id,
+        duration_seconds=body.duration_seconds,
+        step_size=body.step_size,
+        traffic_multiplier=body.traffic_multiplier,
+    )
+
+    return DigitalTwinSimResult(**result)

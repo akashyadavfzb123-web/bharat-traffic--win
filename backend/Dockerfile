@@ -14,14 +14,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser
+# Make start script executable BEFORE switching to non-root user
+RUN chmod +x start.sh
+
+# Create non-root user and set permissions
+RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
-
-# Make start script executable
-RUN chmod +x start.sh
 
 # Run with start script (handles migrations + server)
 CMD ["./start.sh"]

@@ -481,3 +481,405 @@ class TestAdminAccess:
         sim_id = create_resp.json()["simulation"]["id"]
         resp = client.get(f"/api/simulations/{sim_id}/results", headers=headers)
         assert resp.status_code == 200
+
+
+# ── SUMO backend tests ───────────────────────────────────────────────
+
+class TestSumoBackend:
+    """Test SUMO backend integration in the simulation engine."""
+
+    def test_create_with_default_backend(self, client, user_session, seed_city):
+        """Omitting backend should default to deterministic."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Default backend",
+            "scenario_type": "heavy_rain",
+        }, headers=headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["summary"]["simulation_backend"] == "deterministic"
+
+    def test_create_with_explicit_deterministic(self, client, user_session, seed_city):
+        """Explicit backend=deterministic should work like default."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Explicit deterministic",
+            "scenario_type": "heavy_rain",
+            "backend": "deterministic",
+        }, headers=headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["summary"]["simulation_backend"] == "deterministic"
+
+    def test_sumo_backend_returns_503_when_not_installed(self, client, user_session, seed_city):
+        """SUMO backend should return 503 when SUMO is not available."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "SUMO test",
+            "scenario_type": "accident",
+            "backend": "sumo",
+        }, headers=headers)
+        assert resp.status_code == 503
+        data = resp.json()
+        assert "SUMO" in data["detail"] or "unavailable" in data["detail"].lower()
+
+    def test_backend_stored_in_simulation_parameters(self, client, user_session, seed_city):
+        """The backend value should be stored in simulation parameters."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Backend storage",
+            "scenario_type": "festival",
+            "backend": "deterministic",
+        }, headers=headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        params = data["simulation"]["parameters"]
+        assert params is not None
+        assert params.get("simulation_backend") == "deterministic"
+
+    def test_summary_includes_backend_field(self, client, user_session, seed_city):
+        """Summary should include simulation_backend."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Backend in summary",
+            "scenario_type": "heavy_rain",
+        }, headers=headers)
+        assert resp.status_code == 201
+        summary = resp.json()["summary"]
+        assert "simulation_backend" in summary
+        assert summary["simulation_backend"] == "deterministic"
+
+    def test_invalid_backend_value_rejected(self, client, user_session, seed_city):
+        """Invalid backend enum value should be rejected by schema validation."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Bad backend",
+            "scenario_type": "heavy_rain",
+            "backend": "quantum",
+        }, headers=headers)
+        assert resp.status_code == 422  # Pydantic validation error
+
+    def test_sumo_backend_results_still_have_road_results(self, client, user_session, seed_city):
+        """Even when SUMO fails (503), the error response is correct."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "SUMO fail",
+            "scenario_type": "traffic_surge",
+            "backend": "sumo",
+        }, headers=headers)
+        # Should be 503, not 200 with empty results
+        assert resp.status_code == 503
+
+    def test_existing_deterministic_tests_still_pass(self, client, user_session, seed_city):
+        """Deterministic backend should be completely unchanged."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Regression check",
+            "scenario_type": "road_closure",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        assert resp.status_code == 201
+        data = resp.json()
+        targeted = [r for r in data["road_results"] if r["road_id"] == seed_city["road_ids"][0]][0]
+        assert targeted["simulated_vehicles"] == 0
+        assert targeted["simulated_speed_kmph"] == 0.0
+
+
+class TestSumoEngineInternals:
+    """Test internal SUMO engine helper functions."""
+
+    def test_sumo_duration_for_scenario(self):
+        """Each scenario should have a reasonable SUMO duration."""
+        from app.services.simulation_service import _sumo_duration_for_scenario
+
+        durations = {
+            "accident": 1800,
+            "road_closure": 3600,
+            "heavy_rain": 7200,
+            "festival": 5400,
+            "traffic_surge": 3600,
+            "signal_failure": 1800,
+            "vip_movement": 2700,
+        }
+        for scenario, expected in durations.items():
+            assert _sumo_duration_for_scenario(scenario) == expected
+
+    def test_sumo_duration_unknown_scenario(self):
+        """Unknown scenario should get a default duration."""
+        from app.services.simulation_service import _sumo_duration_for_scenario
+        assert _sumo_duration_for_scenario("unknown_type") == 3600
+
+    def test_edge_id_regex_matches_valid_ids(self):
+        """Edge ID regex should correctly parse SUMO edge IDs."""
+        from app.services.simulation_service import _EDGE_ID_RE
+
+        assert _EDGE_ID_RE.match("edge_road_1") is not None
+        assert _EDGE_ID_RE.match("edge_road_42") is not None
+        assert _EDGE_ID_RE.match("edge_road_123") is not None
+        assert _EDGE_ID_RE.match("edge_road_1").group(1) == "1"
+        assert _EDGE_ID_RE.match("edge_road_42").group(1) == "42"
+
+    def test_edge_id_regex_rejects_invalid_ids(self):
+        """Edge ID regex should not match non-road edge IDs."""
+        from app.services.simulation_service import _EDGE_ID_RE
+
+        assert _EDGE_ID_RE.match("edge_highway_1") is None
+        assert _EDGE_ID_RE.match("junction_1") is None
+        assert _EDGE_ID_RE.match("edge_road_") is None
+
+
+# ── Before/After metrics tests (Stage 37) ────────────────────────────
+
+class TestBeforeAfterMetrics:
+    """Test that simulation results include comprehensive before/after metrics."""
+
+    def test_summary_has_before_after_fields(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Metrics test",
+            "scenario_type": "heavy_rain",
+        }, headers=headers)
+        assert resp.status_code == 201
+        summary = resp.json()["summary"]
+        assert "avg_waiting_time_before" in summary
+        assert "avg_waiting_time_after" in summary
+        assert "avg_queue_before" in summary
+        assert "avg_queue_after" in summary
+        assert "total_throughput_before" in summary
+        assert "total_throughput_after" in summary
+        assert "avg_travel_time_before" in summary
+        assert "avg_travel_time_after" in summary
+
+    def test_road_results_have_before_after_fields(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Road metrics",
+            "scenario_type": "traffic_surge",
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        for road in roads:
+            assert "original_waiting_time" in road
+            assert "simulated_waiting_time" in road
+            assert "original_queue_length" in road
+            assert "simulated_queue_length" in road
+            assert "original_throughput" in road
+            assert "simulated_throughput" in road
+            assert "original_travel_time" in road
+            assert "simulated_travel_time" in road
+
+    def test_heavy_rain_increases_waiting_time(self, client, user_session, seed_city):
+        """Heavy rain should increase waiting times across all roads."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Rain wait",
+            "scenario_type": "heavy_rain",
+        }, headers=headers)
+        summary = resp.json()["summary"]
+        assert summary["avg_waiting_time_after"] >= summary["avg_waiting_time_before"]
+
+    def test_heavy_rain_increases_travel_time(self, client, user_session, seed_city):
+        """Heavy rain should increase travel times."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Rain travel",
+            "scenario_type": "heavy_rain",
+        }, headers=headers)
+        summary = resp.json()["summary"]
+        assert summary["avg_travel_time_after"] >= summary["avg_travel_time_before"]
+
+    def test_traffic_surge_increases_throughput(self, client, user_session, seed_city):
+        """Traffic surge should increase total throughput."""
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Surge TP",
+            "scenario_type": "traffic_surge",
+        }, headers=headers)
+        summary = resp.json()["summary"]
+        assert summary["total_throughput_after"] >= summary["total_throughput_before"]
+
+
+# ── Targeted scenario tests (Stage 37) ───────────────────────────────
+
+class TestRoadClosureScenarioDetailed:
+    """Road closure: closed road speed=0, vehicles=0, queue=0."""
+
+    def test_closed_road_speed_is_zero(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Closure speed",
+            "scenario_type": "road_closure",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        closed = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        assert closed["simulated_speed_kmph"] == 0.0
+
+    def test_closed_road_vehicles_are_zero(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Closure veh",
+            "scenario_type": "road_closure",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        closed = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        assert closed["simulated_vehicles"] == 0
+
+    def test_closed_road_congestion_is_worst(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Closure cong",
+            "scenario_type": "road_closure",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        closed = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        assert closed["simulated_congestion"] == "gridlock"
+
+    def test_closed_road_travel_time_is_max(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Closure tt",
+            "scenario_type": "road_closure",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        closed = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        # Travel time should be very high (near 999) when speed is 0
+        assert closed["simulated_travel_time"] >= 900
+
+
+class TestAccidentScenarioDetailed:
+    """Accident: speed drops to 40%, vehicles increase 20%."""
+
+    def test_accident_speed_drops_significantly(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Accident speed",
+            "scenario_type": "accident",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        targeted = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        assert targeted["simulated_speed_kmph"] < targeted["original_speed_kmph"]
+        # Should be ~40% of original
+        ratio = targeted["simulated_speed_kmph"] / targeted["original_speed_kmph"]
+        assert 0.35 <= ratio <= 0.45
+
+    def test_accident_increases_congestion(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Accident cong",
+            "scenario_type": "accident",
+            "parameters": {"road_id": seed_city["road_ids"][0]},
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        targeted = [r for r in roads if r["road_id"] == seed_city["road_ids"][0]][0]
+        # congestion should worsen (higher rank)
+        from app.services.simulation_service import _congestion_rank
+        assert _congestion_rank(targeted["simulated_congestion"]) >= _congestion_rank(targeted["original_congestion"])
+
+
+class TestTrafficSurgeScenarioDetailed:
+    """Traffic surge: vehicles increase ~40%, speed drops ~35%."""
+
+    def test_surge_increases_vehicle_count(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Surge count",
+            "scenario_type": "traffic_surge",
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        for road in roads:
+            assert road["simulated_vehicles"] >= road["original_vehicles"]
+
+    def test_surge_decreases_speed(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Surge speed",
+            "scenario_type": "traffic_surge",
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        for road in roads:
+            assert road["simulated_speed_kmph"] < road["original_speed_kmph"]
+
+    def test_surge_worsens_congestion(self, client, user_session, seed_city):
+        _, headers = user_session
+        resp = client.post("/api/simulations", json={
+            "city_id": seed_city["city_id"],
+            "name": "Surge cong",
+            "scenario_type": "traffic_surge",
+        }, headers=headers)
+        roads = resp.json()["road_results"]
+        from app.services.simulation_service import _congestion_rank
+        for road in roads:
+            assert _congestion_rank(road["simulated_congestion"]) >= _congestion_rank(road["original_congestion"])
+
+
+# ── TraCI scenario application tests (Stage 37) ─────────────────────
+
+class TestTraCIScenarioApplication:
+    """Test that scenario-specific TraCI functions exist and are callable."""
+
+    def test_apply_scenario_traci_exists(self):
+        from app.services.simulation_service import _apply_scenario_traci
+        assert callable(_apply_scenario_traci)
+
+    def test_traci_road_closure_function_exists(self):
+        from app.services.simulation_service import _traci_road_closure
+        assert callable(_traci_road_closure)
+
+    def test_traci_accident_function_exists(self):
+        from app.services.simulation_service import _traci_accident
+        assert callable(_traci_accident)
+
+    def test_traci_traffic_surge_function_exists(self):
+        from app.services.simulation_service import _traci_traffic_surge
+        assert callable(_traci_traffic_surge)
+
+    def test_traci_heavy_rain_function_exists(self):
+        from app.services.simulation_service import _traci_heavy_rain
+        assert callable(_traci_heavy_rain)
+
+    def test_speed_to_congestion_map(self):
+        from app.services.simulation_service import _speed_to_congestion
+        assert _speed_to_congestion(1.0) == "free_flow"
+        assert _speed_to_congestion(0.8) == "moderate"
+        assert _speed_to_congestion(0.6) == "slow"
+        assert _speed_to_congestion(0.4) == "congested"
+        assert _speed_to_congestion(0.2) == "gridlock"
+
+    def test_estimate_queue_from_congestion(self):
+        from app.services.simulation_service import _estimate_queue_from_congestion
+        assert _estimate_queue_from_congestion("free_flow") == 0
+        assert _estimate_queue_from_congestion("moderate") == 3
+        assert _estimate_queue_from_congestion("slow") == 8
+        assert _estimate_queue_from_congestion("congested") == 15
+        assert _estimate_queue_from_congestion("gridlock") == 30
+
+    def test_estimate_waiting_from_congestion(self):
+        from app.services.simulation_service import _estimate_waiting_from_congestion
+        assert _estimate_waiting_from_congestion("free_flow") == 2.0
+        assert _estimate_waiting_from_congestion("moderate") == 10.0
+        assert _estimate_waiting_from_congestion("gridlock") == 90.0

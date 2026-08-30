@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    WS_BROADCAST_INTERVAL: float = 3.0  # seconds between WebSocket broadcasts
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

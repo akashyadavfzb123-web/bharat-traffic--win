@@ -11,7 +11,10 @@ class Base(DeclarativeBase):
 
 
 def _build_database_url(url: str) -> str:
-    """Ensure the URL uses the psycopg driver for SQLAlchemy."""
+    """Ensure the URL uses the psycopg driver for SQLAlchemy, supporting postgres:// and postgresql://."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    
     prefix = "postgresql://"
     target = "postgresql+psycopg://"
     if url.startswith(prefix) and not url.startswith(target):
