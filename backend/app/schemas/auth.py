@@ -1,10 +1,19 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, model_validator
 
 
 class RegisterRequest(BaseModel):
-    name: str
+    name: str = ""
+    full_name: str | None = None
     email: EmailStr
     password: str
+
+    @model_validator(mode="after")
+    def populate_name(self):
+        if not self.name and self.full_name:
+            self.name = self.full_name
+        if not self.name:
+            self.name = self.email.split("@")[0]
+        return self
 
 
 class LoginRequest(BaseModel):
