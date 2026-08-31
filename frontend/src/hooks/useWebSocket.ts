@@ -1,13 +1,7 @@
 /**
  * useWebSocket — connects to /ws/traffic for live data with REST fallback.
  *
- * If the WebSocket connection fails or drops, automatically falls back
- * to polling GET /api/traffic/live at the same interval.
- *
- * Returns:
- *   - data: the latest traffic snapshot (or null)
- *   - connected: whether the WebSocket is currently connected
- *   - mode: 'websocket' | 'rest' | 'disconnected'
+ * Handles disconnects gracefully with backoff to prevent browser console spam.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -58,8 +52,8 @@ export interface TrafficSnapshot {
 
 type ConnectionMode = 'websocket' | 'rest' | 'disconnected';
 
-const WS_RECONNECT_DELAY = 3000;
-const REST_POLL_INTERVAL = 5000;
+const WS_RECONNECT_DELAY = 10000; // Increased retry backoff to prevent log spam
+const REST_POLL_INTERVAL = 15000;
 
 export function useWebSocket() {
   const [data, setData] = useState<TrafficSnapshot | null>(null);
@@ -73,7 +67,7 @@ export function useWebSocket() {
   // Get WebSocket URL
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('bharat_traffic_token');
-    const base = import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000';
+    const base = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000';
     return `${base}/ws/traffic?token=${token || ''}`;
   }, []);
 
@@ -86,7 +80,6 @@ export function useWebSocket() {
       try {
         const response = await apiClient.get('/traffic/live');
         const d = response.data;
-        // Transform REST response to match WebSocket format
         const snapshot: TrafficSnapshot = {
           type: 'traffic_update',
           timestamp: Date.now(),
@@ -131,7 +124,7 @@ export function useWebSocket() {
   // Connect WebSocket
   const connectWs = useCallback(() => {
     if (wsRef.current) {
-      wsRef.current.close();
+      try { wsRef.current.close(); } catch {}
     }
 
     try {
@@ -142,7 +135,6 @@ export function useWebSocket() {
         if (mountedRef.current) {
           setConnected(true);
           setMode('websocket');
-          // Stop REST polling if it was running
           if (restTimer.current) {
             clearInterval(restTimer.current);
             restTimer.current = null;
@@ -156,28 +148,22 @@ export function useWebSocket() {
           if (mountedRef.current) {
             setData(snapshot);
           }
-        } catch {
-          // Ignore malformed messages
-        }
+        } catch {}
       };
 
       ws.onclose = () => {
         if (mountedRef.current) {
           setConnected(false);
           setMode('disconnected');
-          // Fall back to REST
           startRestPolling();
-          // Try to reconnect WebSocket after delay
           reconnectTimer.current = setTimeout(connectWs, WS_RECONNECT_DELAY);
         }
       };
 
       ws.onerror = () => {
-        // onclose will handle fallback
-        ws.close();
+        try { ws.close(); } catch {}
       };
 
-      // Ping to keep alive
       const pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send('ping');
@@ -186,19 +172,17 @@ export function useWebSocket() {
 
       ws.addEventListener('close', () => clearInterval(pingInterval));
     } catch {
-      // Fall back to REST immediately
       startRestPolling();
     }
   }, [getWsUrl, startRestPolling]);
 
-  // Mount: try WebSocket, fallback to REST
   useEffect(() => {
     mountedRef.current = true;
     connectWs();
 
     return () => {
       mountedRef.current = false;
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) try { wsRef.current.close(); } catch {}
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (restTimer.current) clearInterval(restTimer.current);
     };
