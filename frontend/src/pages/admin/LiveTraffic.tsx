@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { trafficService } from '../../services/api';
 import type { Junction, Incident } from '../../types/traffic';
-import { MOCK_ROAD_GEOJSON } from '../../data/mockGeoJSON';
 import type { RoadSegmentProperties } from '../../data/mockGeoJSON';
+import { CITIES } from '../../data/cityData';
 import { useRealtime } from '../../context/RealtimeContext';
+import { useApp } from '../../context/AppContext';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Link } from 'react-router-dom';
 import {
@@ -27,6 +28,7 @@ type InspectorTarget =
   | null;
 
 export const AdminLiveTraffic: React.FC = () => {
+  const { selectedCity } = useApp();
   const { snapshot, wsConnected, wsMode } = useRealtime();
   const [junctions, setJunctions] = useState<Junction[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -34,14 +36,29 @@ export const AdminLiveTraffic: React.FC = () => {
   const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
 
+  const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
+
   useEffect(() => {
-    Promise.all([trafficService.getJunctions(), trafficService.getIncidents()]).then(
-      ([jList, incList]) => {
-        setJunctions(jList);
-        setIncidents(incList);
-      }
-    );
-  }, []);
+    // Map cityConfig junctions into Junction types
+    const cityJunctions: Junction[] = cityConfig.junctions.map((cj) => ({
+      id: cj.id,
+      name: cj.name,
+      city: selectedCity,
+      lat: cj.lat,
+      lng: cj.lng,
+      status: cj.status,
+      currentWaitTimeSec: cj.waitTimeSec,
+      vehicleCount: cj.queueLengthVeh,
+      congestionIndex: cj.congestionPct,
+      signalMode: cj.status === 'critical' ? 'adaptive' : 'fixed',
+      cycleLengthSec: 90,
+      activePhase: 'Main Phase',
+      lastUpdated: 'Just now',
+    }));
+
+    setJunctions(cityJunctions);
+    trafficService.getIncidents().then(setIncidents);
+  }, [selectedCity, cityConfig]);
 
   // Sync junction data with real-time simulation
   useEffect(() => {
@@ -83,7 +100,7 @@ export const AdminLiveTraffic: React.FC = () => {
   });
 
   // Filtered roads
-  const roadFeatures = MOCK_ROAD_GEOJSON.features.map((f) => f.properties);
+  const roadFeatures = cityConfig.roadsGeoJSON.features.map((f) => f.properties);
   const filteredRoads = roadFeatures.filter((r) => {
     if (roadFilter === 'gridlock') return r.roadStatus === 'Gridlock';
     if (roadFilter === 'heavy') return r.roadStatus === 'Heavy Congestion';
@@ -94,8 +111,8 @@ export const AdminLiveTraffic: React.FC = () => {
 
   // Filtered GeoJSON for map
   const filteredGeoJSON = {
-    ...MOCK_ROAD_GEOJSON,
-    features: MOCK_ROAD_GEOJSON.features.filter((f) => filteredRoads.some((r) => r.id === f.properties.id)),
+    ...cityConfig.roadsGeoJSON,
+    features: cityConfig.roadsGeoJSON.features.filter((f) => filteredRoads.some((r) => r.id === f.properties.id)),
   };
 
   // Summary stats
@@ -119,10 +136,10 @@ export const AdminLiveTraffic: React.FC = () => {
         <div>
           <h2 className="text-lg font-black text-slate-100 font-mono flex items-center gap-2">
             <Map className="w-5 h-5 text-emerald-400" />
-            LIVE TRAFFIC & JUNCTION TELEMETRY
+            LIVE TRAFFIC & JUNCTION TELEMETRY ({selectedCity.toUpperCase()})
           </h2>
           <p className="text-[11px] text-slate-400">
-            Interactive GIS matrix — click any road segment or intersection marker for detailed telemetry.
+            Interactive GIS matrix for {selectedCity} — click any road segment or intersection marker for detailed telemetry.
           </p>
         </div>
 
@@ -216,7 +233,7 @@ export const AdminLiveTraffic: React.FC = () => {
             <MapContainer
               junctions={filteredJunctions}
               incidents={incidents}
-              roadGeoJSON={filteredGeoJSON}
+              roadGeoJSON={filteredGeoJSON as any}
               onRoadClick={handleRoadClick}
               onJunctionClick={handleJunctionClick}
               selectedRoadId={selectedTarget?.type === 'road' ? selectedTarget.data.id : null}
@@ -262,7 +279,7 @@ export const AdminLiveTraffic: React.FC = () => {
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               <div className="px-3 py-2.5 border-b border-slate-800 shrink-0">
                 <h3 className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono">
-                  Junction Queue Monitor
+                  {selectedCity} Junction Queue Monitor
                 </h3>
               </div>
               <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
@@ -316,13 +333,11 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
 
   return (
     <div className="space-y-3">
-      {/* Road Name */}
       <div>
         <h4 className="text-sm font-bold text-slate-100">{data.name}</h4>
         <p className="text-[10px] text-slate-400 font-mono">{data.corridor}</p>
       </div>
 
-      {/* Road Status Badge */}
       <div className={`flex items-center justify-between p-2 rounded-lg border ${
         statusKey === 'red' ? 'bg-red-500/10 border-red-500/30' :
         statusKey === 'amber' ? 'bg-amber-500/10 border-amber-500/30' :
@@ -338,7 +353,6 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
         }`}>{data.roadStatus}</span>
       </div>
 
-      {/* Telemetry Grid */}
       <div className="space-y-1.5">
         <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Telemetry</span>
         <div className="grid grid-cols-2 gap-1.5">
@@ -349,7 +363,6 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
         </div>
       </div>
 
-      {/* Road Details */}
       <div className="space-y-1.5">
         <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Details</span>
         <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-1 text-[10px] font-mono">
@@ -372,7 +385,6 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
         </div>
       </div>
 
-      {/* Related Incidents */}
       {roadIncidents.length > 0 && (
         <div className="space-y-1.5">
           <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Related Incidents</span>
@@ -390,7 +402,6 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
         </div>
       )}
 
-      {/* Actions */}
       <Link
         to="/admin/signal-optimization"
         className="flex items-center justify-center gap-1.5 w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition-all"
@@ -406,13 +417,11 @@ const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident
 const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
   return (
     <div className="space-y-3">
-      {/* Junction Name */}
       <div>
         <h4 className="text-sm font-bold text-slate-100">{data.name}</h4>
         <p className="text-[10px] text-slate-400 font-mono">{data.city}</p>
       </div>
 
-      {/* Status Badge */}
       <div className={`flex items-center justify-between p-2 rounded-lg border ${
         data.status === 'critical' ? 'bg-red-500/10 border-red-500/30' :
         data.status === 'red' ? 'bg-amber-500/10 border-amber-500/30' :
@@ -428,7 +437,6 @@ const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
         }`}>{data.status}</span>
       </div>
 
-      {/* Telemetry Grid */}
       <div className="space-y-1.5">
         <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Telemetry</span>
         <div className="grid grid-cols-2 gap-1.5">
@@ -439,7 +447,6 @@ const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
         </div>
       </div>
 
-      {/* Signal Details */}
       <div className="space-y-1.5">
         <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Signal Controller</span>
         <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-1 text-[10px] font-mono">
@@ -458,7 +465,6 @@ const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
         </div>
       </div>
 
-      {/* Queue Length Visual */}
       <div className="space-y-1.5">
         <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Queue Pressure</span>
         <div className="w-full h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
@@ -476,7 +482,6 @@ const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
         </div>
       </div>
 
-      {/* Emergency Corridor Check */}
       {data.signalMode === 'emergency' && (
         <div className="p-2 bg-red-950/20 rounded-lg border border-red-500/30 flex items-center gap-2">
           <Siren className="w-3.5 h-3.5 text-red-400 animate-pulse" />
@@ -484,7 +489,6 @@ const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
         </div>
       )}
 
-      {/* Actions */}
       <Link
         to="/admin/signal-optimization"
         className="flex items-center justify-center gap-1.5 w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition-all"
