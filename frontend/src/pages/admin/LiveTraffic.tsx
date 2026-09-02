@@ -6,6 +6,7 @@ import { CITIES } from '../../data/cityData';
 import { useRealtime } from '../../context/RealtimeContext';
 import { useApp } from '../../context/AppContext';
 import { MapContainer } from '../../components/common/MapContainer';
+import { MOCK_EMERGENCY_CORRIDORS, corridorsToMapFormat } from '../../mock/mockEmergency';
 import { Link } from 'react-router-dom';
 import {
   Map,
@@ -35,6 +36,7 @@ export const AdminLiveTraffic: React.FC = () => {
   const [filterMode, setFilterMode] = useState<'all' | 'critical' | 'adaptive'>('all');
   const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
+  const [greenCorridors, setGreenCorridors] = useState(corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS));
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
 
@@ -234,6 +236,7 @@ export const AdminLiveTraffic: React.FC = () => {
               junctions={filteredJunctions}
               incidents={incidents}
               roadGeoJSON={filteredGeoJSON as any}
+              greenCorridors={greenCorridors}
               onRoadClick={handleRoadClick}
               onJunctionClick={handleJunctionClick}
               selectedRoadId={selectedTarget?.type === 'road' ? selectedTarget.data.id : null}

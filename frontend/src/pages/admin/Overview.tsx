@@ -4,6 +4,7 @@ import type { Junction, Incident, EmergencyCorridor, DigitalTwinNode } from '../
 import { useRealtime } from '../../context/RealtimeContext';
 import { StatCard } from '../../components/common/StatCard';
 import { MapContainer } from '../../components/common/MapContainer';
+import { MOCK_EMERGENCY_CORRIDORS, corridorsToMapFormat } from '../../mock/mockEmergency';
 import { Link } from 'react-router-dom';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { MOCK_PREDICTIONS } from '../../mock/mockTrafficData';
@@ -240,7 +241,7 @@ export const AdminOverview: React.FC = () => {
             </Link>
           </div>
           <div className="flex-1">
-            <MapContainer junctions={junctions} incidents={incidents} digitalTwinNodes={twinNodes} />
+            <MapContainer junctions={junctions} incidents={incidents} digitalTwinNodes={twinNodes} greenCorridors={corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS)} />
           </div>
         </div>
 

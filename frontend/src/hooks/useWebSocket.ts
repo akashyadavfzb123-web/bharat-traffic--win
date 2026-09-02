@@ -64,11 +64,15 @@ export function useWebSocket() {
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
 
-  // Get WebSocket URL
+  // Get WebSocket URL — use current host so the Vite proxy handles it
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('bharat_traffic_token');
-    const base = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000';
-    return `${base}/ws/traffic?token=${token || ''}`;
+    if (import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL) {
+      const base = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL;
+      return `${base}/ws/traffic?token=${token || ''}`;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/ws/traffic?token=${token || ''}`;
   }, []);
 
   // REST fallback poll

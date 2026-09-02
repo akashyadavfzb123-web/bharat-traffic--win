@@ -5,8 +5,8 @@
 - PostgreSQL connected (DATABASE_URL in `backend/.env`)
 
 ## How to reproduce artifacts
-1. Copy `.env` from main checkout root: `cp frontend/.env frontend/.env.local` (or just use `frontend/.env`)
-2. Dependencies already installed in `frontend/node_modules/`
+1. Frontend dependencies already installed in `frontend/node_modules/`
+2. Use `frontend/.env` for environment variables
 
 ## How to run the server
 ```bash

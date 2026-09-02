@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default=["http://localhost:3000"])
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://127.0.0.1:5173"])
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/bharat_traffic_twin"
     SUMO_HOME: str = "/usr/share/sumo"
 
