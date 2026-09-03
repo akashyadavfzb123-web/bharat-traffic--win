@@ -1,4 +1,5 @@
 import type { RouteOption, CongestionLevel } from '../types/traffic';
+import { fetchOSRMRoutes } from '../services/routingApi';
 
 // ── Seeded pseudo-random for deterministic results per origin+dest ────────
 
@@ -162,7 +163,25 @@ export interface GenerateRoutesParams {
   city: string;
 }
 
-export function generateRoutes(params: GenerateRoutesParams): RouteOption[] {
+/**
+ * Try OSRM first; fall back to mock Bezier-route generation on failure.
+ */
+export async function generateRoutes(params: GenerateRoutesParams): Promise<RouteOption[]> {
+  // ── 1. Attempt real OSRM routing ─────────────────────────────────────
+  try {
+    const osrmRoutes = await fetchOSRMRoutes(params);
+    if (osrmRoutes.length > 0) return osrmRoutes;
+  } catch {
+    // OSRM unavailable — fall through to mock
+  }
+
+  // ── 2. Mock fallback ─────────────────────────────────────────────────
+  return generateMockRoutes(params);
+}
+
+// ── Mock route generator (Bezier detour paths) ──────────────────────────────
+
+function generateMockRoutes(params: GenerateRoutesParams): RouteOption[] {
   const { origin, destination, originName, destinationName, city } = params;
   const straightDist = distKm(origin, destination);
   const seed = `${originName}::${destinationName}`;

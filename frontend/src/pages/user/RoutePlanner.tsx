@@ -30,6 +30,7 @@ export const UserRoutePlanner: React.FC = () => {
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
   const [calculating, setCalculating] = useState(false);
   const [geocodingError, setGeocodingError] = useState<string | null>(null);
+  const [routingSource, setRoutingSource] = useState<'osrm' | 'mock' | null>(null);
 
   // ── Generate routes from geocoded locations ────────────────────────
   const calculateRoutes = useCallback(
@@ -63,14 +64,32 @@ export const UserRoutePlanner: React.FC = () => {
           parseFloat(destResults[0].lat),
         ];
 
-        // Generate 3 routes
-        const generated = generateRoutes({
-          origin: originCoords,
-          destination: destCoords,
-          originName: origin,
-          destinationName: destination,
-          city: selectedCity,
-        });
+        // Generate 3 routes (OSRM real routing, with mock fallback)
+        let generated: Awaited<ReturnType<typeof generateRoutes>>;
+        let source: 'osrm' | 'mock' = 'mock';
+        try {
+          // Attempt real OSRM routing
+          const { fetchOSRMRoutes } = await import('../../services/routingApi');
+          generated = await fetchOSRMRoutes({
+            origin: originCoords,
+            destination: destCoords,
+            originName: origin,
+            destinationName: destination,
+            city: selectedCity,
+          });
+          source = 'osrm';
+        } catch {
+          // OSRM unavailable — use mock fallback
+          generated = await generateRoutes({
+            origin: originCoords,
+            destination: destCoords,
+            originName: origin,
+            destinationName: destination,
+            city: selectedCity,
+          });
+          source = 'mock';
+        }
+        setRoutingSource(source);
 
         // Find best route (lowest score = best ETA + congestion combo)
         let bestIdx = 0;
@@ -130,6 +149,11 @@ export const UserRoutePlanner: React.FC = () => {
           <Badge color="cyan" dot>
             AI ROUTING MATRIX
           </Badge>
+          {routingSource && (
+            <Badge color={routingSource === 'osrm' ? 'emerald' : 'amber'}>
+              {routingSource === 'osrm' ? '● OSRM LIVE ROUTING' : '● MOCK ROUTING'}
+            </Badge>
+          )}
         </div>
         <p className="text-xs text-slate-400 mt-0.5">
           Enter starting location and destination in {selectedCity} to compare traffic-aware routes, distance, ETA, and time saved.

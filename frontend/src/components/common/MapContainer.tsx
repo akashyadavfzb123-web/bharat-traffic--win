@@ -22,10 +22,10 @@ interface MapProps {
   incidents?: Incident[];
   digitalTwinNodes?: DigitalTwinNode[];
   routes?: RouteOption[];
-  selectedRouteId?: string | null;
   roadGeoJSON?: RoadGeoJSONCollection;
   selectedRoadId?: string | null;
   selectedJunctionId?: string | null;
+  selectedRouteId?: string | null;
   onRoadClick?: (road: RoadSegmentProperties) => void;
   onJunctionClick?: (junction: Junction) => void;
   center?: [number, number]; // [lng, lat]
@@ -63,8 +63,8 @@ export const MapContainer: React.FC<MapProps> = ({
   incidents = [],
   digitalTwinNodes = [],
   routes = [],
-  selectedRouteId = null,
   roadGeoJSON,
+  selectedRouteId,
   onRoadClick,
   onJunctionClick,
   center,
@@ -74,6 +74,8 @@ export const MapContainer: React.FC<MapProps> = ({
   const { selectedCity, setSelectedCity } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const markersRef = useRef<maplibregl.Marker[]>([]);
+  const isMapLoadedRef = useRef<boolean>(false);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
@@ -124,17 +126,20 @@ export const MapContainer: React.FC<MapProps> = ({
         speed: 1.5,
       });
 
-      new maplibregl.Marker({ color: '#06b6d4' })
+      const m = new maplibregl.Marker({ color: '#06b6d4' })
         .setLngLat([lng, lat])
         .setPopup(new maplibregl.Popup().setHTML(`<b style="color: #0284c7;">${res.display_name}</b>`))
         .addTo(mapRef.current);
+      markersRef.current.push(m);
     }
     setSearchResults([]);
     setSearchQuery('');
   };
 
+  // 1. Initialize Map ONCE per container/style/city mount
   useEffect(() => {
     if (!mapContainerRef.current) return;
+    isMapLoadedRef.current = false;
 
     const activeTileUrl = MAP_STYLES[currentStyle].url;
 
@@ -169,294 +174,317 @@ export const MapContainer: React.FC<MapProps> = ({
     mapRef.current = map;
 
     map.on('load', () => {
-      // 1. Render City Road GeoJSON polylines (Traffic Flow Lines: Green, Yellow, Red)
-      const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
-      if (targetGeoJSON && showTrafficLayer) {
-        map.addSource('road-segments-src', {
-          type: 'geojson',
-          data: targetGeoJSON as unknown as string,
-        });
-
-        // Outer casing glow layer for heavy congestion (Red)
-        map.addLayer({
-          id: 'road-segments-glow',
-          type: 'line',
-          source: 'road-segments-src',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-color': [
-              'step',
-              ['get', 'congestion'],
-              'rgba(34, 197, 94, 0.2)', // Green glow
-              40,
-              'rgba(234, 179, 8, 0.3)',  // Yellow glow
-              70,
-              'rgba(239, 68, 68, 0.6)',  // Red pulsating glow
-            ],
-            'line-width': 12,
-            'line-blur': 3,
-          },
-        });
-
-        // Main Traffic Flow Line
-        map.addLayer({
-          id: 'road-segments-line',
-          type: 'line',
-          source: 'road-segments-src',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-color': [
-              'step',
-              ['get', 'congestion'],
-              '#22c55e', // Green (>40 km/h Clear)
-              40,
-              '#eab308', // Yellow (20-40 km/h Slow)
-              70,
-              '#ef4444', // Red (<20 km/h Gridlock)
-            ],
-            'line-width': 7,
-            'line-opacity': 0.9,
-          },
-        });
-
-        map.on('mouseenter', 'road-segments-line', () => {
-          map.getCanvas().style.cursor = 'pointer';
-        });
-
-        map.on('mouseleave', 'road-segments-line', () => {
-          map.getCanvas().style.cursor = '';
-        });
-
-        map.on('click', 'road-segments-line', (e) => {
-          if (e.features && e.features.length > 0 && onRoadClick) {
-            onRoadClick(e.features[0].properties as any);
-          }
-        });
-      }
-
-      // 2. Render Custom Route Lines
-      routes.forEach((route) => {
-        const sourceId = `route-source-${route.id}`;
-        const layerId = `route-layer-${route.id}`;
-
-        if (!map.getSource(sourceId)) {
-          map.addSource(sourceId, {
-            type: 'geojson',
-            data: {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: route.coordinates,
-              },
-            },
-          });
-
-          map.addLayer({
-            id: layerId,
-            type: 'line',
-            source: sourceId,
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color':
-                selectedRouteId && route.id === selectedRouteId
-                  ? '#06b6d4'
-                  : route.isRecommended
-                  ? '#06b6d4'
-                  : route.congestionLevel === 'severe'
-                  ? '#ef4444'
-                  : '#f59e0b',
-              'line-width':
-                selectedRouteId && route.id === selectedRouteId
-                  ? 7
-                  : route.isRecommended
-                  ? 5
-                  : 3,
-              'line-opacity':
-                selectedRouteId
-                  ? route.id === selectedRouteId
-                    ? 1.0
-                    : 0.35
-                  : 0.85,
-            },
-          });
-        }
-      });
-
-      // 2b. Render origin/destination markers when routes are present
-      if (routes.length > 0) {
-        const firstRoute = routes[0];
-        if (firstRoute.coordinates.length >= 2) {
-          // Origin marker
-          const originEl = document.createElement('div');
-          originEl.className = 'w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
-          originEl.innerHTML = '<span class="text-[9px] font-bold text-white">A</span>';
-          new maplibregl.Marker({ element: originEl })
-            .setLngLat(firstRoute.coordinates[0])
-            .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#10b981;'>Origin:</b> ${firstRoute.origin}`))
-            .addTo(map);
-
-          // Destination marker
-          const destEl = document.createElement('div');
-          destEl.className = 'w-5 h-5 rounded-full bg-red-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
-          destEl.innerHTML = '<span class="text-[9px] font-bold text-white">B</span>';
-          new maplibregl.Marker({ element: destEl })
-            .setLngLat(firstRoute.coordinates[firstRoute.coordinates.length - 1])
-            .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#ef4444;'>Destination:</b> ${firstRoute.destination}`))
-            .addTo(map);
-        }
-      }
-
-      // 3. Render Ambulances & Emergency Priority Vehicles
-      if (showEmergencyVehicles) {
-        (cityConfig.vehicles || [])
-          .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
-          .forEach((v) => {
-            const el = document.createElement('div');
-            el.className =
-              'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
-            el.style.boxShadow = '0 0 16px #ef4444';
-
-            el.innerHTML = `
-              <span class="text-sm">🚑</span>
-              <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
-            `;
-
-            const popupContent = `
-              <div style="font-family: monospace; padding: 4px; min-width: 200px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
-                  <span style="font-size: 11px; font-weight: bold; color: #ef4444; text-transform: uppercase;">🚑 Emergency Ambulance</span>
-                  <span style="font-size: 9px; background: rgba(239,68,68,0.2); color: #f87171; padding: 2px 4px; border-radius: 4px;">PRIORITY</span>
-                </div>
-                <h4 style="margin: 0; font-size: 12px; font-weight: bold; color: #f8fafc;">${v.name}</h4>
-                <div style="margin-top: 6px; font-size: 10px; color: #94a3b8; line-height: 1.4;">
-                  <div>Speed: <strong style="color: #38bdf8;">${v.speedKmh} km/h</strong></div>
-                  <div>Destination: <strong style="color: #f8fafc;">${v.destination}</strong></div>
-                  <div>ETA: <strong style="color: #4ade80;">${v.etaMin || 8} mins</strong></div>
-                  <div style="margin-top: 4px; color: #a7f3d0; background: rgba(16,185,129,0.15); padding: 3px; border-radius: 4px; font-weight: bold;">
-                    ${v.detail || 'Green Corridor Active'}
-                  </div>
-                </div>
-              </div>
-            `;
-
-            new maplibregl.Marker(el)
-              .setLngLat([v.lng, v.lat])
-              .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-              .addTo(map);
-          });
-      }
-
-      // 4. Render Buses, Heavy Vehicles & Traffic Clusters
-      if (showTransitVehicles) {
-        (cityConfig.vehicles || [])
-          .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
-          .forEach((v) => {
-            const el = document.createElement('div');
-
-            if (v.type === 'city_bus') {
-              el.className =
-                'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-              el.innerHTML = '🚌';
-            } else if (v.type === 'heavy_freight') {
-              el.className =
-                'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-              el.innerHTML = '🚛';
-            } else {
-              el.className =
-                'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
-              el.innerHTML = '🚘';
-            }
-
-            const popupContent = `
-              <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-                <h4 style="margin: 0; font-size: 11px; font-weight: bold; color: #38bdf8;">${v.name}</h4>
-                <div style="margin-top: 4px; font-size: 10px; color: #94a3b8;">
-                  <div>Speed: <strong>${v.speedKmh} km/h</strong></div>
-                  <div>Corridor: <strong>${v.destination}</strong></div>
-                  <div style="color: #cbd5e1; margin-top: 2px;">${v.detail}</div>
-                </div>
-              </div>
-            `;
-
-            new maplibregl.Marker(el)
-              .setLngLat([v.lng, v.lat])
-              .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-              .addTo(map);
-          });
-      }
-
-      // 5. Render City Junction Markers
-      const activeJunctions = junctions.length > 0 ? junctions : cityConfig.junctions;
-      activeJunctions.forEach((j: any) => {
-        const el = document.createElement('div');
-        el.className =
-          'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 border-slate-900 shadow-lg';
-
-        if (j.status === 'critical') {
-          el.style.backgroundColor = '#ef4444';
-          el.style.boxShadow = '0 0 12px #ef4444';
-        } else if (j.status === 'red') {
-          el.style.backgroundColor = '#f97316';
-        } else if (j.status === 'yellow') {
-          el.style.backgroundColor = '#eab308';
-        } else {
-          el.style.backgroundColor = '#22c55e';
-        }
-
-        const inner = document.createElement('div');
-        inner.className = 'w-2 h-2 rounded-full bg-white';
-        el.appendChild(inner);
-
-        el.addEventListener('click', () => {
-          if (onJunctionClick) onJunctionClick(j);
-        });
-
-        const popupContent = `
-          <div style="font-family: monospace; padding: 4px;">
-            <h4 style="margin: 0; font-size: 13px; font-weight: bold; color: #38bdf8;">${j.name}</h4>
-            <p style="margin: 2px 0 0; font-size: 11px; color: #94a3b8;">Metro: ${selectedCity}</p>
-            <div style="margin-top: 6px; font-size: 11px; color: #f8fafc;">
-              <div>Wait Time: <strong>${j.currentWaitTimeSec || j.waitTimeSec || 60}s</strong></div>
-              <div>Queue Vehicles: <strong>${j.vehicleCount || j.queueLengthVeh || 300}</strong></div>
-              <div>Congestion: <strong style="color: ${(j.congestionIndex || j.congestionPct) > 80 ? '#ef4444' : '#22c55e'};">${j.congestionIndex || j.congestionPct}%</strong></div>
-            </div>
-          </div>
-        `;
-
-        new maplibregl.Marker(el)
-          .setLngLat([j.lng, j.lat])
-          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-          .addTo(map);
-      });
-
-      // 6. Render Incidents
-      incidents.forEach((inc) => {
-        const el = document.createElement('div');
-        el.className =
-          'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
-        el.innerHTML = '⚠️';
-
-        new maplibregl.Marker(el)
-          .setLngLat([inc.lng, inc.lat])
-          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
-          .addTo(map);
-      });
+      isMapLoadedRef.current = true;
+      updateMapData(map);
     });
 
     return () => {
+      isMapLoadedRef.current = false;
+      markersRef.current.forEach((m) => m.remove());
+      markersRef.current = [];
       map.remove();
+      mapRef.current = null;
     };
-  }, [junctions, incidents, digitalTwinNodes, routes, selectedRouteId, roadGeoJSON, currentStyle, showTrafficLayer, showEmergencyVehicles, showTransitVehicles, selectedCity, onJunctionClick, onRoadClick]);
+  }, [currentStyle, selectedCity]);
+
+  // Function to dynamically update layers & markers WITHOUT tearing down the map
+  const updateMapData = (map: maplibregl.Map) => {
+    if (!map || !isMapLoadedRef.current) return;
+
+    // Clear old HTML markers
+    markersRef.current.forEach((m) => m.remove());
+    markersRef.current = [];
+
+    // 1. Traffic Flow Lines
+    const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
+    if (map.getSource('road-segments-src')) {
+      (map.getSource('road-segments-src') as maplibregl.GeoJSONSource).setData(targetGeoJSON as any);
+      map.setLayoutProperty('road-segments-line', 'visibility', showTrafficLayer ? 'visible' : 'none');
+      map.setLayoutProperty('road-segments-glow', 'visibility', showTrafficLayer ? 'visible' : 'none');
+    } else if (targetGeoJSON) {
+      map.addSource('road-segments-src', {
+        type: 'geojson',
+        data: targetGeoJSON as unknown as string,
+      });
+
+      map.addLayer({
+        id: 'road-segments-glow',
+        type: 'line',
+        source: 'road-segments-src',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round',
+          visibility: showTrafficLayer ? 'visible' : 'none',
+        },
+        paint: {
+          'line-color': [
+            'step',
+            ['get', 'congestion'],
+            'rgba(34, 197, 94, 0.2)',
+            40,
+            'rgba(234, 179, 8, 0.3)',
+            70,
+            'rgba(239, 68, 68, 0.6)',
+          ],
+          'line-width': 12,
+          'line-blur': 3,
+        },
+      });
+
+      map.addLayer({
+        id: 'road-segments-line',
+        type: 'line',
+        source: 'road-segments-src',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round',
+          visibility: showTrafficLayer ? 'visible' : 'none',
+        },
+        paint: {
+          'line-color': [
+            'step',
+            ['get', 'congestion'],
+            '#22c55e',
+            40,
+            '#eab308',
+            70,
+            '#ef4444',
+          ],
+          'line-width': 7,
+          'line-opacity': 0.9,
+        },
+      });
+
+      map.on('click', 'road-segments-line', (e) => {
+        if (e.features && e.features.length > 0 && onRoadClick) {
+          onRoadClick(e.features[0].properties as any);
+        }
+      });
+    }
+
+    // 2. Custom Route Lines
+    routes.forEach((route) => {
+      const sourceId = `route-source-${route.id}`;
+      const layerId = `route-layer-${route.id}`;
+
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: route.coordinates,
+            },
+          },
+        });
+
+        map.addLayer({
+          id: layerId,
+          type: 'line',
+          source: sourceId,
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round',
+          },
+          paint: {
+            'line-color':
+              selectedRouteId && route.id === selectedRouteId
+                ? '#06b6d4'
+                : route.isRecommended
+                ? '#06b6d4'
+                : route.congestionLevel === 'severe'
+                ? '#ef4444'
+                : '#f59e0b',
+            'line-width':
+              selectedRouteId && route.id === selectedRouteId
+                ? 7
+                : route.isRecommended
+                ? 5
+                : 3,
+            'line-opacity':
+              selectedRouteId
+                ? route.id === selectedRouteId
+                  ? 1.0
+                  : 0.35
+                : 0.85,
+          },
+        });
+      }
+    });
+
+    // 2b. Route Origin / Destination Markers
+    if (routes.length > 0) {
+      const firstRoute = routes[0];
+      if (firstRoute.coordinates && firstRoute.coordinates.length >= 2) {
+        const originEl = document.createElement('div');
+        originEl.className = 'w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
+        originEl.innerHTML = '<span class="text-[9px] font-bold text-white">A</span>';
+        const m1 = new maplibregl.Marker({ element: originEl })
+          .setLngLat(firstRoute.coordinates[0])
+          .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#10b981;'>Origin:</b> ${firstRoute.origin || 'Start'}`))
+          .addTo(map);
+        markersRef.current.push(m1);
+
+        const destEl = document.createElement('div');
+        destEl.className = 'w-5 h-5 rounded-full bg-red-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
+        destEl.innerHTML = '<span class="text-[9px] font-bold text-white">B</span>';
+        const m2 = new maplibregl.Marker({ element: destEl })
+          .setLngLat(firstRoute.coordinates[firstRoute.coordinates.length - 1])
+          .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#ef4444;'>Destination:</b> ${firstRoute.destination || 'End'}`))
+          .addTo(map);
+        markersRef.current.push(m2);
+      }
+    }
+
+    // 3. Render Ambulances & Emergency Priority Vehicles
+    if (showEmergencyVehicles) {
+      (cityConfig.vehicles || [])
+        .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
+        .forEach((v) => {
+          const el = document.createElement('div');
+          el.className =
+            'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
+          el.style.boxShadow = '0 0 16px #ef4444';
+
+          el.innerHTML = `
+            <span class="text-sm">🚑</span>
+            <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
+          `;
+
+          const popupContent = `
+            <div style="font-family: monospace; padding: 4px; min-width: 200px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
+                <span style="font-size: 11px; font-weight: bold; color: #ef4444; text-transform: uppercase;">🚑 Emergency Ambulance</span>
+                <span style="font-size: 9px; background: rgba(239,68,68,0.2); color: #f87171; padding: 2px 4px; border-radius: 4px;">PRIORITY</span>
+              </div>
+              <h4 style="margin: 0; font-size: 12px; font-weight: bold; color: #f8fafc;">${v.name}</h4>
+              <div style="margin-top: 6px; font-size: 10px; color: #94a3b8; line-height: 1.4;">
+                <div>Speed: <strong style="color: #38bdf8;">${v.speedKmh} km/h</strong></div>
+                <div>Destination: <strong style="color: #f8fafc;">${v.destination}</strong></div>
+                <div>ETA: <strong style="color: #4ade80;">${v.etaMin || 8} mins</strong></div>
+                <div style="margin-top: 4px; color: #a7f3d0; background: rgba(16,185,129,0.15); padding: 3px; border-radius: 4px; font-weight: bold;">
+                  ${v.detail || 'Green Corridor Active'}
+                </div>
+              </div>
+            </div>
+          `;
+
+          const m = new maplibregl.Marker(el)
+            .setLngLat([v.lng, v.lat])
+            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+            .addTo(map);
+          markersRef.current.push(m);
+        });
+    }
+
+    // 4. Render Buses, Heavy Vehicles & Traffic Clusters
+    if (showTransitVehicles) {
+      (cityConfig.vehicles || [])
+        .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
+        .forEach((v) => {
+          const el = document.createElement('div');
+
+          if (v.type === 'city_bus') {
+            el.className =
+              'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+            el.innerHTML = '🚌';
+          } else if (v.type === 'heavy_freight') {
+            el.className =
+              'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+            el.innerHTML = '🚛';
+          } else {
+            el.className =
+              'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
+            el.innerHTML = '🚘';
+          }
+
+          const popupContent = `
+            <div style="font-family: monospace; padding: 4px; min-width: 180px;">
+              <h4 style="margin: 0; font-size: 11px; font-weight: bold; color: #38bdf8;">${v.name}</h4>
+              <div style="margin-top: 4px; font-size: 10px; color: #94a3b8;">
+                <div>Speed: <strong>${v.speedKmh} km/h</strong></div>
+                <div>Corridor: <strong>${v.destination}</strong></div>
+                <div style="color: #cbd5e1; margin-top: 2px;">${v.detail}</div>
+              </div>
+            </div>
+          `;
+
+          const m = new maplibregl.Marker(el)
+            .setLngLat([v.lng, v.lat])
+            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+            .addTo(map);
+          markersRef.current.push(m);
+        });
+    }
+
+    // 5. Render City Junction Markers
+    const activeJunctions = junctions.length > 0 ? junctions : cityConfig.junctions;
+    activeJunctions.forEach((j: any) => {
+      const el = document.createElement('div');
+      el.className =
+        'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 border-slate-900 shadow-lg';
+
+      if (j.status === 'critical') {
+        el.style.backgroundColor = '#ef4444';
+        el.style.boxShadow = '0 0 12px #ef4444';
+      } else if (j.status === 'red') {
+        el.style.backgroundColor = '#f97316';
+      } else if (j.status === 'yellow') {
+        el.style.backgroundColor = '#eab308';
+      } else {
+        el.style.backgroundColor = '#22c55e';
+      }
+
+      const inner = document.createElement('div');
+      inner.className = 'w-2 h-2 rounded-full bg-white';
+      el.appendChild(inner);
+
+      el.addEventListener('click', () => {
+        if (onJunctionClick) onJunctionClick(j);
+      });
+
+      const popupContent = `
+        <div style="font-family: monospace; padding: 4px;">
+          <h4 style="margin: 0; font-size: 13px; font-weight: bold; color: #38bdf8;">${j.name}</h4>
+          <p style="margin: 2px 0 0; font-size: 11px; color: #94a3b8;">Metro: ${selectedCity}</p>
+          <div style="margin-top: 6px; font-size: 11px; color: #f8fafc;">
+            <div>Wait Time: <strong>${j.currentWaitTimeSec || j.waitTimeSec || 60}s</strong></div>
+            <div>Queue Vehicles: <strong>${j.vehicleCount || j.queueLengthVeh || 300}</strong></div>
+            <div>Congestion: <strong style="color: ${(j.congestionIndex || j.congestionPct) > 80 ? '#ef4444' : '#22c55e'};">${j.congestionIndex || j.congestionPct}%</strong></div>
+          </div>
+        </div>
+      `;
+
+      const m = new maplibregl.Marker(el)
+        .setLngLat([j.lng, j.lat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+        .addTo(map);
+      markersRef.current.push(m);
+    });
+
+    // 6. Render Incidents
+    incidents.forEach((inc) => {
+      const el = document.createElement('div');
+      el.className =
+        'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
+      el.innerHTML = '⚠️';
+
+      const m = new maplibregl.Marker(el)
+        .setLngLat([inc.lng, inc.lat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
+        .addTo(map);
+      markersRef.current.push(m);
+    });
+  };
+
+  // 2. Reactively update map data whenever props or layer toggles change (WITHOUT destroying map canvas!)
+  useEffect(() => {
+    if (mapRef.current && isMapLoadedRef.current) {
+      updateMapData(mapRef.current);
+    }
+  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, selectedRouteId, showTrafficLayer, showEmergencyVehicles, showTransitVehicles]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
@@ -604,7 +632,7 @@ export const MapContainer: React.FC<MapProps> = ({
       <div className="flex-1 relative">
         <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-        {/* Legend Overlay: Traffic Flow Colors & Vehicle Markers */}
+        {/* Legend Overlay */}
         <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1.5 z-10 shadow-lg font-mono">
           <div className="font-bold text-slate-400 text-[10px] uppercase flex items-center justify-between gap-4">
             <span>{selectedCity} Live Intelligence</span>
