@@ -13,6 +13,7 @@ import {
   X,
   Zap,
   Globe,
+  ChevronDown,
 } from 'lucide-react';
 
 interface GreenCorridor {
@@ -47,36 +48,52 @@ interface MapProps {
 
 type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets';
 
-// Build tile URLs from env vars, falling back to CARTO/OSM/ArcGIS free tiers.
-// To remove the "API KEY REQUIRED" watermark on CARTO tiles, set
-// VITE_CARTO_API_KEY in your .env (free at https://app.carto.com).
-const cartoKey = import.meta.env.VITE_CARTO_API_KEY || '';
-const cartoQs = cartoKey ? `?api_key=${cartoKey}` : '';
+// All tile sources are free — no API keys required.
+// Dark and traffic modes use OSM raster tiles with paint overrides for the visual style.
+const OSM_TILE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const ARCGIS_SATELLITE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
-const MAP_STYLES: Record<MapStyleType, { name: string; url: string; icon: string }> = {
+interface MapStyleDef {
+  name: string;
+  url: string;
+  icon: string;
+  /** Optional raster paint overrides applied to the base tile layer. */
+  paint?: Record<string, unknown>;
+}
+
+const MAP_STYLES: Record<MapStyleType, MapStyleDef> = {
   dark: {
     name: 'Command Dark',
-    url: import.meta.env.VITE_MAP_DARK_URL || `https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png${cartoQs}`,
+    url: import.meta.env.VITE_MAP_DARK_URL || OSM_TILE,
     icon: '🌙',
+    paint: {
+      'raster-saturation': -0.85,
+      'raster-brightness-max': 0.18,
+      'raster-contrast': 0.1,
+    },
   },
   satellite: {
     name: 'Satellite Aerial',
-    url: import.meta.env.VITE_MAP_SATELLITE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    url: import.meta.env.VITE_MAP_SATELLITE_URL || ARCGIS_SATELLITE,
     icon: '🛰️',
   },
   traffic: {
     name: 'Traffic Density',
-    url: import.meta.env.VITE_MAP_TRAFFIC_URL || `https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png${cartoQs}`,
+    url: import.meta.env.VITE_MAP_TRAFFIC_URL || OSM_TILE,
     icon: '🚦',
+    paint: {
+      'raster-saturation': -0.4,
+      'raster-brightness-max': 0.65,
+    },
   },
   streets: {
     name: 'Standard Streets',
-    url: import.meta.env.VITE_MAP_STREETS_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    url: import.meta.env.VITE_MAP_STREETS_URL || OSM_TILE,
     icon: '🏙️',
   },
 };
 
-function buildMapStyle(tileUrl: string) {
+function buildMapStyle(tileUrl: string, paint?: Record<string, unknown>) {
   return {
     version: 8 as const,
     sources: {
@@ -84,7 +101,7 @@ function buildMapStyle(tileUrl: string) {
         type: 'raster' as const,
         tiles: [tileUrl],
         tileSize: 256,
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        attribution: '&copy; OpenStreetMap',
       },
     },
     layers: [
@@ -94,6 +111,7 @@ function buildMapStyle(tileUrl: string) {
         source: 'base-tile-src',
         minzoom: 0,
         maxzoom: 19,
+        ...(paint || {}),
       },
     ],
   };
@@ -121,6 +139,7 @@ export const MapContainer: React.FC<MapProps> = ({
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
+  const [showCityMenu, setShowCityMenu] = useState(false);
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
@@ -156,11 +175,18 @@ export const MapContainer: React.FC<MapProps> = ({
   // Handle City Change (fly to, don't recreate map)
   const handleCitySelect = useCallback((cityName: string) => {
     setSelectedCity(cityName);
+    setShowCityMenu(false);
     const targetCity = CITIES[cityName];
     if (mapRef.current && targetCity) {
       mapRef.current.flyTo({ center: targetCity.center, zoom: targetCity.zoom, speed: 1.2 });
     }
   }, [setSelectedCity]);
+
+  const handleAreaSelect = useCallback((area: { lat: number; lng: number }) => {
+    if (mapRef.current) {
+      mapRef.current.flyTo({ center: [area.lng, area.lat], zoom: 14, speed: 1.5 });
+    }
+  }, []);
 
   const handleSelectSearchResult = useCallback((res: SearchResult) => {
     const lat = parseFloat(res.lat);
@@ -182,7 +208,7 @@ export const MapContainer: React.FC<MapProps> = ({
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: buildMapStyle(MAP_STYLES[currentStyle].url),
+      style: buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint),
       center: activeCenter,
       zoom,
       interactive,
@@ -224,7 +250,7 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url));
+    map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
     // Wait for the new style to load before re-adding custom layers
     const onStyleLoad = () => {
       addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
@@ -521,26 +547,71 @@ export const MapContainer: React.FC<MapProps> = ({
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
       {/* Top Map Header Control Bar: 4-City Tabs + Search + Style Menu */}
       <div className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0">
-        {/* 1. 4-City Selector Tabs */}
+        {/* 1. City Switcher Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setShowCityMenu(!showCityMenu)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-cyan-300 hover:text-cyan-200 hover:border-cyan-500/40 transition-all"
+          >
+            <Globe className="w-3 h-3 text-cyan-400" />
+            <span>{selectedCity}</span>
+            <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${showCityMenu ? 'rotate-180' : ''}`} />
+          </button>
+          {showCityMenu && (
+            <div className="absolute left-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 w-44 font-mono text-xs space-y-0.5">
+              <div className="text-[9px] text-slate-500 font-bold px-2 py-1 uppercase">Switch Metro</div>
+              {Object.keys(CITIES).map((cityName) => {
+                const city = CITIES[cityName];
+                const worstArea = city.areas?.reduce((w, a) => a.congestion > w.congestion ? a : w, city.areas[0]);
+                return (
+                  <button
+                    key={cityName}
+                    onClick={() => handleCitySelect(cityName)}
+                    className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                      selectedCity === cityName
+                        ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>{cityName}</span>
+                    {worstArea && (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                        worstArea.congestion > 85 ? 'bg-red-500/20 text-red-400' :
+                        worstArea.congestion > 60 ? 'bg-amber-500/20 text-amber-400' :
+                        'bg-emerald-500/20 text-emerald-400'
+                      }`}>{worstArea.congestion}%</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 2. Area Tabs — heavy-traffic zones for the selected city */}
         <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
           <span className="text-[10px] font-mono text-cyan-400 px-2 font-bold flex items-center gap-1 hidden sm:flex">
-            <Globe className="w-3 h-3" />
-            CITY:
+            <Zap className="w-3 h-3" />
+            AREAS:
           </span>
-          {Object.keys(CITIES).map((cityName) => (
+          {cityConfig.areas.map((area) => (
             <button
-              key={cityName}
-              onClick={() => handleCitySelect(cityName)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-bold font-mono transition-all ${
-                selectedCity === cityName
-                  ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
+              key={area.name}
+              onClick={() => handleAreaSelect(area)}
+              className="group flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold font-mono transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
             >
-              {cityName}
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                area.congestion > 85 ? 'bg-red-500 shadow-sm shadow-red-500/50' :
+                area.congestion > 60 ? 'bg-amber-400' :
+                area.congestion > 35 ? 'bg-yellow-400' :
+                'bg-emerald-400'
+              }`} />
+              <span>{area.name}</span>
             </button>
           ))}
-        </div>          {/* 2. City-Scoped Location Search Bar with Suggestions */}
+        </div>
+
+        {/* 3. City-Scoped Location Search Bar with Suggestions */}
           <div className="relative flex-1 max-w-xs">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -674,9 +745,9 @@ export const MapContainer: React.FC<MapProps> = ({
         </div>
       </div>
 
-      {/* Close suggestions on outside click */}
-      {showSuggestions && (
-        <div className="absolute inset-0 z-5" onClick={() => setShowSuggestions(false)} />
+      {/* Close suggestions / city menu on outside click */}
+      {(showSuggestions || showCityMenu) && (
+        <div className="absolute inset-0 z-5" onClick={() => { setShowSuggestions(false); setShowCityMenu(false); }} />
       )}
 
       {/* Main Map Container Canvas */}

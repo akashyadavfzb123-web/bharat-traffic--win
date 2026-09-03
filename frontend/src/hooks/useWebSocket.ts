@@ -52,7 +52,9 @@ export interface TrafficSnapshot {
 
 type ConnectionMode = 'websocket' | 'rest' | 'disconnected';
 
-const WS_RECONNECT_DELAY = 10000; // Increased retry backoff to prevent log spam
+const WS_INITIAL_DELAY = 3000;
+const WS_MAX_DELAY = 60000; // Cap at 1 minute
+const WS_MAX_RETRIES = 15; // Stop reconnecting after 15 failures
 const REST_POLL_INTERVAL = 15000;
 
 export function useWebSocket() {
@@ -63,6 +65,7 @@ export function useWebSocket() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const retryCountRef = useRef(0);
 
   // Get WebSocket URL — use current host so the Vite proxy handles it
   const getWsUrl = useCallback(() => {
@@ -139,6 +142,7 @@ export function useWebSocket() {
         if (mountedRef.current) {
           setConnected(true);
           setMode('websocket');
+          retryCountRef.current = 0; // Reset backoff on success
           if (restTimer.current) {
             clearInterval(restTimer.current);
             restTimer.current = null;
@@ -160,11 +164,17 @@ export function useWebSocket() {
           setConnected(false);
           setMode('disconnected');
           startRestPolling();
-          reconnectTimer.current = setTimeout(connectWs, WS_RECONNECT_DELAY);
+          // Exponential backoff: 3s, 6s, 12s, … capped at 60s, stop after WS_MAX_RETRIES
+          retryCountRef.current += 1;
+          if (retryCountRef.current <= WS_MAX_RETRIES) {
+            const delay = Math.min(WS_INITIAL_DELAY * Math.pow(2, retryCountRef.current - 1), WS_MAX_DELAY);
+            reconnectTimer.current = setTimeout(connectWs, delay);
+          }
         }
       };
 
       ws.onerror = () => {
+        // Suppress console noise — onclose will handle reconnection
         try { ws.close(); } catch {}
       };
 

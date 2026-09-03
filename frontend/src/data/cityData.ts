@@ -1,9 +1,21 @@
+export interface CityArea {
+  name: string;
+  lat: number;
+  lng: number;
+  /** 0-100 congestion score */
+  congestion: number;
+  /** Human-readable traffic label */
+  trafficStatus: 'Gridlock' | 'Heavy' | 'Slow' | 'Clear';
+}
+
 export interface CityConfig {
   id: string;
   name: string;
   state: string;
   center: [number, number]; // [lng, lat]
   zoom: number;
+  /** Key neighborhoods / heavy-traffic zones shown above the map */
+  areas: CityArea[];
   junctions: Array<{
     id: string;
     name: string;
@@ -41,6 +53,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Karnataka',
     center: [77.5946, 12.9716],
     zoom: 12,
+    areas: [
+      { name: 'Silk Board', lat: 12.9172, lng: 77.6228, congestion: 94, trafficStatus: 'Gridlock' },
+      { name: 'Marathahalli', lat: 12.9569, lng: 77.7011, congestion: 79, trafficStatus: 'Heavy' },
+      { name: 'Hebbal', lat: 13.0359, lng: 77.597, congestion: 91, trafficStatus: 'Gridlock' },
+      { name: 'HSR Layout', lat: 12.9116, lng: 77.6476, congestion: 67, trafficStatus: 'Slow' },
+      { name: 'MG Road', lat: 12.973, lng: 77.6171, congestion: 35, trafficStatus: 'Clear' },
+    ],
     junctions: [
       { id: 'blr-1', name: 'Silk Board Junction', lat: 12.9172, lng: 77.6228, status: 'critical', waitTimeSec: 226, queueLengthVeh: 1466, congestionPct: 94 },
       { id: 'blr-2', name: 'Dairy Circle Flyover', lat: 12.9348, lng: 77.605, status: 'red', waitTimeSec: 126, queueLengthVeh: 886, congestionPct: 79 },
@@ -82,6 +101,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Delhi / Haryana / UP',
     center: [77.2090, 28.6139],
     zoom: 11.5,
+    areas: [
+      { name: 'AIIMS Ring Road', lat: 28.5672, lng: 77.2100, congestion: 96, trafficStatus: 'Gridlock' },
+      { name: 'DND Flyway', lat: 28.5684, lng: 77.2796, congestion: 92, trafficStatus: 'Gridlock' },
+      { name: 'Gurgaon IFFCO Chowk', lat: 28.4721, lng: 77.0725, congestion: 84, trafficStatus: 'Heavy' },
+      { name: 'Connaught Place', lat: 28.6315, lng: 77.2167, congestion: 65, trafficStatus: 'Slow' },
+      { name: 'Noida Sector 18', lat: 28.5708, lng: 77.3261, congestion: 38, trafficStatus: 'Clear' },
+    ],
     junctions: [
       { id: 'del-1', name: 'Connaught Place Outer Circle', lat: 28.6315, lng: 77.2167, status: 'yellow', waitTimeSec: 85, queueLengthVeh: 620, congestionPct: 65 },
       { id: 'del-2', name: 'DND Flyway Toll Plaza', lat: 28.5684, lng: 77.2796, status: 'critical', waitTimeSec: 210, queueLengthVeh: 1850, congestionPct: 92 },
@@ -117,6 +143,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Maharashtra',
     center: [72.8777, 19.0760],
     zoom: 11.5,
+    areas: [
+      { name: 'Bandra-Worli Sea Link', lat: 19.0330, lng: 72.8170, congestion: 95, trafficStatus: 'Gridlock' },
+      { name: 'Western Express (Andheri)', lat: 19.1197, lng: 72.8464, congestion: 93, trafficStatus: 'Gridlock' },
+      { name: 'BKC Kalanagar', lat: 19.0600, lng: 72.8530, congestion: 87, trafficStatus: 'Heavy' },
+      { name: 'Dadar TT Circle', lat: 19.0178, lng: 72.8478, congestion: 68, trafficStatus: 'Slow' },
+      { name: 'Marine Drive', lat: 18.9260, lng: 72.8230, congestion: 28, trafficStatus: 'Clear' },
+    ],
     junctions: [
       { id: 'bom-1', name: 'Bandra-Worli Sea Link Toll', lat: 19.0330, lng: 72.8170, status: 'critical', waitTimeSec: 250, queueLengthVeh: 2100, congestionPct: 95 },
       { id: 'bom-2', name: 'BKC Kalanagar Junction', lat: 19.0600, lng: 72.8530, status: 'red', waitTimeSec: 180, queueLengthVeh: 1420, congestionPct: 87 },
@@ -152,6 +185,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Telangana',
     center: [78.4867, 17.3850],
     zoom: 12,
+    areas: [
+      { name: 'HITECH City', lat: 17.4504, lng: 78.3808, congestion: 91, trafficStatus: 'Gridlock' },
+      { name: 'Jubilee Hills', lat: 17.4319, lng: 78.4072, congestion: 89, trafficStatus: 'Heavy' },
+      { name: 'Gachibowli', lat: 17.4401, lng: 78.3615, congestion: 82, trafficStatus: 'Heavy' },
+      { name: 'Begumpet', lat: 17.4448, lng: 78.4682, congestion: 62, trafficStatus: 'Slow' },
+      { name: 'Charminar', lat: 17.3616, lng: 78.4747, congestion: 32, trafficStatus: 'Clear' },
+    ],
     junctions: [
       { id: 'hyd-1', name: 'HITECH City Cyber Towers', lat: 17.4504, lng: 78.3808, status: 'critical', waitTimeSec: 215, queueLengthVeh: 1520, congestionPct: 91 },
       { id: 'hyd-2', name: 'Gachibowli Bio-Diversity Flyover', lat: 17.4401, lng: 78.3615, status: 'red', waitTimeSec: 155, queueLengthVeh: 1100, congestionPct: 82 },
