@@ -16,6 +16,7 @@ from app.api.simulations import router as simulations_router
 from app.api.sumo import router as sumo_router
 from app.api.traffic import router as traffic_router
 from app.api.ws_traffic import router as ws_router
+from app.api.yolo_vision import router as yolo_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, unhandled_error_handler
 from app.core.logging_config import logger, setup_logging
@@ -57,6 +58,7 @@ app.include_router(incidents_router)
 app.include_router(analytics_router)
 app.include_router(sumo_router)
 app.include_router(ws_router)
+app.include_router(yolo_router)
 
 
 @app.middleware("http")
