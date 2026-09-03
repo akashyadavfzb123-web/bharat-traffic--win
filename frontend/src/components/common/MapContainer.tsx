@@ -47,6 +47,8 @@ interface MapProps {
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
+  /** Hide admin-specific overlays (junctions, vehicles, cameras, sensors, transit) for user-only maps */
+  hideAdminOverlays?: boolean;
   /** Synthetic data objects from SyntheticTrafficProvider */
   cameras?: SyntheticCamera[];
   sensors?: SyntheticSensor[];
@@ -137,6 +139,7 @@ export const MapContainer: React.FC<MapProps> = ({
   center,
   zoom = 12,
   interactive = true,
+  hideAdminOverlays = false,
   cameras = [],
   sensors = [],
   busStops = [],
@@ -286,15 +289,18 @@ export const MapContainer: React.FC<MapProps> = ({
     // After the base style loads, fetch real road geometry from OSM, then add layers.
     map.on('load', async () => {
       try {
-        // Fetch real road geometry from OpenStreetMap so traffic lines follow actual roads
-        const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
-        const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
-        addRoadSource(map, realGeoJSON, showTrafficLayer);
+        if (!hideAdminOverlays) {
+          const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+          const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+          addRoadSource(map, realGeoJSON, showTrafficLayer);
+          addGreenCorridorLayers(map, greenCorridors);
+        }
         addRouteLayers(map, routes);
-        addGreenCorridorLayers(map, greenCorridors);
       } catch (e) { console.warn('[MapContainer] load layers error:', e); }
-      addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
-      addIncidentMarkers(map, incidents);
+      if (!hideAdminOverlays) {
+        addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
+        addIncidentMarkers(map, incidents);
+      }
     });
 
     return () => {
@@ -315,9 +321,11 @@ export const MapContainer: React.FC<MapProps> = ({
     map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
     // Wait for the new style to load before re-adding custom layers
     const onStyleLoad = async () => {
-      const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
-      const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
-      addRoadSource(map, realGeoJSON, showTrafficLayer);
+      if (!hideAdminOverlays) {
+        const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+        const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+        addRoadSource(map, realGeoJSON, showTrafficLayer);
+      }
       addRouteLayers(map, routes);
     };
     map.once('style.load', onStyleLoad);
@@ -326,6 +334,7 @@ export const MapContainer: React.FC<MapProps> = ({
 
   // Update road GeoJSON source when data or toggle changes (only if style is stable)
   useEffect(() => {
+    if (hideAdminOverlays) return;
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     (async () => {
@@ -333,35 +342,53 @@ export const MapContainer: React.FC<MapProps> = ({
       const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
       addRoadSource(map, realGeoJSON, showTrafficLayer);
     })();
-  }, [roadGeoJSON, showTrafficLayer, cityConfig]);
+  }, [roadGeoJSON, showTrafficLayer, cityConfig, hideAdminOverlays]);
 
   // Update green corridors on map
   useEffect(() => {
+    if (hideAdminOverlays) return;
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     addGreenCorridorLayers(map, greenCorridors);
-  }, [greenCorridors]);
+  }, [greenCorridors, hideAdminOverlays]);
 
   // Update junction markers
   useEffect(() => {
+    if (hideAdminOverlays) return;
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
-  }, [junctions, cityConfig, selectedCity]);
+  }, [junctions, cityConfig, selectedCity, hideAdminOverlays]);
 
   // Update incident markers
   useEffect(() => {
+    if (hideAdminOverlays) return;
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     addIncidentMarkers(map, incidents);
-  }, [incidents]);
+  }, [incidents, hideAdminOverlays]);
 
   // Update route layers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     addRouteLayers(map, routes);
-  }, [routes]);
+  }, [routes, selectedRouteId]);
+
+  // Auto-fit map bounds to selected route (user route planner mode)
+  useEffect(() => {
+    if (!hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (!routes || routes.length === 0) return;
+    const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes[0];
+    if (!routeToFit || !routeToFit.coordinates || routeToFit.coordinates.length < 2) return;
+    const bounds = routeToFit.coordinates.reduce(
+      (b, coord) => b.extend(coord as maplibregl.LngLatLike),
+      new maplibregl.LngLatBounds(routeToFit.coordinates[0] as maplibregl.LngLatLike, routeToFit.coordinates[0] as maplibregl.LngLatLike),
+    );
+    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 }, maxZoom: 14, duration: 800 });
+  }, [routes, selectedRouteId, hideAdminOverlays]);
 
   // ── Imperative helpers ──
 
