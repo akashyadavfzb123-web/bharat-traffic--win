@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Camera,
   Eye,
@@ -33,134 +33,161 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import {
+  yoloService,
+  createYoloWs,
+  VEHICLE_COLORS as SVC_COLORS,
+  type CameraFeed,
+  type Detection,
+  type VehicleCount,
+  type YoloAlert,
+  type DensityTrendPoint,
+  type YoloSnapshot,
+  type InsightBundle,
+  type ModelInfo,
+} from '../../services/yoloService';
 
-// ── Types ──
-interface VehicleDetection {
-  id: string;
-  type: 'car' | 'bus' | 'truck' | 'bike' | 'auto' | 'bicycle' | 'person';
-  confidence: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+// ── Color map for bounding boxes ──
+const BOX_COLORS: Record<string, string> = SVC_COLORS;
 
-interface CameraFeed {
-  id: string;
-  name: string;
-  location: string;
-  status: 'online' | 'offline';
-  resolution: string;
-}
-
-interface Alert {
-  id: string;
-  type: 'warning' | 'critical' | 'info' | 'success';
-  title: string;
-  message: string;
-  timestamp: string;
-}
-
-interface VehicleCount {
-  type: string;
-  count: number;
-  percentage: number;
-  trend: 'up' | 'down' | 'stable';
-}
-
-// ── Mock Data ──
-const MOCK_CAMERAS: CameraFeed[] = [
-  { id: 'cam-01', name: 'ITO Flyover Cam - 01', location: 'ITO, Delhi', status: 'online', resolution: '1280x720' },
-  { id: 'cam-02', name: 'Connaught Place Cam - 02', location: 'CP, Delhi', status: 'online', resolution: '1920x1080' },
-  { id: 'cam-03', name: 'AIIMS Junction Cam - 03', location: 'AIIMS, Delhi', status: 'offline', resolution: '1280x720' },
-  { id: 'cam-04', name: 'Chandni Chowk Cam - 04', location: 'Chandni Chowk, Delhi', status: 'online', resolution: '1280x720' },
-];
-
-const VEHICLE_COLORS: Record<string, string> = {
-  car: '#22c55e',
-  bus: '#f97316',
-  truck: '#ef4444',
-  bike: '#a855f7',
-  auto: '#eab308',
-  bicycle: '#06b6d4',
-  person: '#64748b',
-};
-
-const MOCK_VEHICLE_COUNTS: VehicleCount[] = [
-  { type: 'Cars', count: 42, percentage: 58.3, trend: 'up' },
-  { type: 'Bikes', count: 18, percentage: 25.0, trend: 'up' },
-  { type: 'Buses', count: 5, percentage: 6.9, trend: 'down' },
-  { type: 'Trucks', count: 7, percentage: 9.7, trend: 'stable' },
-];
-
-const MOCK_ALERTS: Alert[] = [
-  { id: '1', type: 'critical', title: 'High congestion detected', message: 'Density above 75% at ITO Flyover', timestamp: '21:54:40' },
-  { id: '2', type: 'warning', title: 'Queue length increasing', message: 'Queue length 186m and growing', timestamp: '21:54:20' },
-  { id: '3', type: 'info', title: 'Heavy truck detected', message: 'High truck count: 7', timestamp: '21:53:55' },
-  { id: '4', type: 'success', title: 'Camera quality good', message: 'Detection confidence stable at 92%', timestamp: '21:53:30' },
-];
-
-const MOCK_DENSITY_TREND = Array.from({ length: 12 }, (_, i) => ({
-  time: `${21 + Math.floor(i / 4)}:${(i % 4) * 15}:00`,
-  density: 50 + Math.random() * 40,
-  queue: 100 + Math.random() * 100,
-}));
-
-const MOCK_VEHICLE_DISTRIBUTION = [
-  { name: 'Cars', value: 42, color: '#22c55e' },
-  { name: 'Bikes', value: 18, color: '#a855f7' },
-  { name: 'Buses', value: 5, color: '#f97316' },
-  { name: 'Trucks', value: 7, color: '#ef4444' },
-];
-
-// ── Main Component ──
+// ── Main Component ──────────────────────────────────────────────────
 export const AdminYoloVision: React.FC = () => {
-  const [selectedCamera, setSelectedCamera] = useState<CameraFeed>(MOCK_CAMERAS[0]);
+  // Camera state
+  const [cameras, setCameras] = useState<CameraFeed[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<CameraFeed | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(true);
-  const [isProcessing] = useState(true);
+
+  // Live data from backend / WS
   const [fps, setFps] = useState(22.4);
   const [confidence, setConfidence] = useState(92);
   const [totalVehicles, setTotalVehicles] = useState(72);
   const [trafficDensity, setTrafficDensity] = useState(78);
   const [queueLength, setQueueLength] = useState(186);
+  const [detections, setDetections] = useState<Detection[]>([]);
+  const [vehicleCounts, setVehicleCounts] = useState<VehicleCount[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [detections, setDetections] = useState<VehicleDetection[]>([]);
 
-  // Update time
+  // Density trend + alerts + insight
+  const [densityTrend, setDensityTrend] = useState<DensityTrendPoint[]>([]);
+  const [alerts, setAlerts] = useState<YoloAlert[]>([]);
+  const [insightBundle, setInsightBundle] = useState<InsightBundle | null>(null);
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
+
+  // WebSocket ref for cleanup
+  const wsCleanupRef = useRef<(() => void) | null>(null);
+
+  // ── Clock ──
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Simulate detection updates
+  // ── Load cameras on mount ──
   useEffect(() => {
-    if (!isProcessing) return;
+    yoloService.getCameras().then((cams) => {
+      setCameras(cams);
+      if (cams.length > 0) setSelectedCamera(cams[0]);
+    });
+    yoloService.getModelInfo().then(setModelInfo);
+  }, []);
 
+  // ── Load density trend + alerts + insight on camera change ──
+  useEffect(() => {
+    const camId = selectedCamera?.id || 'cam-01';
+    yoloService.getDensityTrend(camId, 12).then((trend) => setDensityTrend(trend.points));
+    yoloService.getAlerts(10).then(setAlerts);
+    yoloService.getInsight(camId).then(setInsightBundle);
+  }, [selectedCamera?.id]);
+
+  // ── WebSocket: real-time YOLO snapshots ──
+  useEffect(() => {
+    const camId = selectedCamera?.id || 'cam-01';
+
+    // cleanup previous WS
+    if (wsCleanupRef.current) {
+      wsCleanupRef.current();
+      wsCleanupRef.current = null;
+    }
+
+    const cleanup = createYoloWs({
+      cameraId: camId,
+      onSnapshot: (snap: YoloSnapshot) => {
+        setFps(snap.fps);
+        setConfidence(snap.confidence);
+        setTotalVehicles(snap.total_vehicles);
+        setTrafficDensity(snap.traffic_density);
+        setQueueLength(snap.queue_length_meters);
+        setDetections(snap.detections);
+        setVehicleCounts(snap.vehicle_counts);
+      },
+      onAlert: (alert: YoloAlert) => {
+        setAlerts((prev) => [alert, ...prev].slice(0, 15));
+      },
+      onConnect: () => setIsDemoMode(false),
+      onDisconnect: () => setIsDemoMode(true),
+      onError: () => setIsDemoMode(true),
+    });
+
+    wsCleanupRef.current = cleanup;
+    return () => cleanup();
+  }, [selectedCamera?.id]);
+
+  // Also poll REST fallback every 3s when WS is not connected
+  useEffect(() => {
+    if (!isDemoMode) return; // WS is active, skip polling
+    const camId = selectedCamera?.id || 'cam-01';
     const interval = setInterval(() => {
-      // Simulate vehicle count changes
-      setTotalVehicles((prev) => prev + Math.floor(Math.random() * 5) - 2);
-      setTrafficDensity((prev) => Math.min(100, Math.max(0, prev + Math.floor(Math.random() * 5) - 2)));
-      setQueueLength((prev) => Math.max(0, prev + Math.floor(Math.random() * 10) - 5));
-      setFps((prev) => Math.max(15, Math.min(30, prev + (Math.random() * 2 - 1))));
-      setConfidence((prev) => Math.max(80, Math.min(100, prev + (Math.random() * 2 - 1))));
-
-      // Generate random detections
-      const newDetections: VehicleDetection[] = Array.from({ length: Math.floor(Math.random() * 10) + 5 }, (_, i) => ({
-        id: `det-${i}`,
-        type: ['car', 'bus', 'truck', 'bike', 'auto', 'bicycle', 'person'][Math.floor(Math.random() * 7)] as any,
-        confidence: 0.7 + Math.random() * 0.3,
-        x: Math.random() * 800,
-        y: Math.random() * 400,
-        width: 40 + Math.random() * 60,
-        height: 30 + Math.random() * 40,
-      }));
-      setDetections(newDetections);
-    }, 1000);
-
+      yoloService.getSnapshot(camId).then((snap) => {
+        setFps(snap.fps);
+        setConfidence(snap.confidence);
+        setTotalVehicles(snap.total_vehicles);
+        setTrafficDensity(snap.traffic_density);
+        setQueueLength(snap.queue_length_meters);
+        setDetections(snap.detections);
+        setVehicleCounts(snap.vehicle_counts);
+      });
+    }, 3000);
     return () => clearInterval(interval);
-  }, [isProcessing]);
+  }, [isDemoMode, selectedCamera?.id]);
 
-  const totalDetected = useMemo(() => MOCK_VEHICLE_COUNTS.reduce((sum, v) => sum + v.count, 0), []);
+  // ── Derived data ──
+  const totalDetected = useMemo(() => vehicleCounts.reduce((sum, v) => sum + v.count, 0) || totalVehicles, [vehicleCounts, totalVehicles]);
+
+  const pieDistribution = useMemo(() => {
+    if (vehicleCounts.length === 0) {
+      return [
+        { name: 'Cars', value: 42, color: '#22c55e' },
+        { name: 'Bikes', value: 18, color: '#a855f7' },
+        { name: 'Buses', value: 5, color: '#f97316' },
+        { name: 'Trucks', value: 7, color: '#ef4444' },
+      ];
+    }
+    return vehicleCounts
+      .filter((vc) => vc.count > 0)
+      .map((vc) => ({
+        name: vc.label,
+        value: vc.count,
+        color: BOX_COLORS[vc.vehicle_type] || '#64748b',
+      }));
+  }, [vehicleCounts]);
+
+  // KPI values from vehicleCounts (fallback to static)
+  const getKpiCount = useCallback(
+    (type: string) => {
+      const found = vehicleCounts.find((vc) => vc.vehicle_type === type);
+      return found || { count: 0, percentage: 0, trend: 'stable' as const };
+    },
+    [vehicleCounts],
+  );
+  const carKpi = getKpiCount('car');
+  const bikeKpi = getKpiCount('bike');
+  const busKpi = getKpiCount('bus');
+  const truckKpi = getKpiCount('truck');
+
+  const handleCameraChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const cam = cameras.find((c) => c.id === e.target.value);
+    if (cam) setSelectedCamera(cam);
+  };
 
   return (
     <div className="space-y-4">
@@ -183,11 +210,11 @@ export const AdminYoloVision: React.FC = () => {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Camera Selector */}
           <select
-            value={selectedCamera.id}
-            onChange={(e) => setSelectedCamera(MOCK_CAMERAS.find((c) => c.id === e.target.value) || MOCK_CAMERAS[0])}
+            value={selectedCamera?.id || 'cam-01'}
+            onChange={handleCameraChange}
             className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500/50"
           >
-            {MOCK_CAMERAS.map((cam) => (
+            {cameras.map((cam) => (
               <option key={cam.id} value={cam.id}>
                 Camera: {cam.name}
               </option>
@@ -196,19 +223,19 @@ export const AdminYoloVision: React.FC = () => {
 
           {/* Camera Status */}
           <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border ${
-            selectedCamera.status === 'online'
+            selectedCamera?.status === 'online'
               ? 'bg-emerald-500/10 border-emerald-500/30'
               : 'bg-red-500/10 border-red-500/30'
           }`}>
-            {selectedCamera.status === 'online' ? (
+            {selectedCamera?.status === 'online' ? (
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
             ) : (
               <WifiOff className="w-3.5 h-3.5 text-red-400" />
             )}
             <span className={`text-[10px] font-mono font-bold ${
-              selectedCamera.status === 'online' ? 'text-emerald-400' : 'text-red-400'
+              selectedCamera?.status === 'online' ? 'text-emerald-400' : 'text-red-400'
             }`}>
-              {selectedCamera.status.toUpperCase()}
+              {(selectedCamera?.status || 'offline').toUpperCase()}
             </span>
           </div>
 
@@ -222,7 +249,7 @@ export const AdminYoloVision: React.FC = () => {
           {/* Model Info */}
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg">
             <Cpu className="w-3.5 h-3.5 text-purple-400" />
-            <span className="text-[10px] font-mono font-bold text-purple-400">YOLOv8</span>
+            <span className="text-[10px] font-mono font-bold text-purple-400">{modelInfo?.model_name || 'YOLOv8'}</span>
           </div>
 
           {/* Demo Toggle */}
@@ -231,7 +258,7 @@ export const AdminYoloVision: React.FC = () => {
             className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
               isDemoMode
                 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
             }`}
           >
             {isDemoMode ? 'DEMO MODE' : 'LIVE MODE'}
@@ -241,62 +268,14 @@ export const AdminYoloVision: React.FC = () => {
 
       {/* ── 8 KPI Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-        <KpiMini
-          label="Vehicles Detected"
-          value={totalVehicles.toString()}
-          icon={Car}
-          color="cyan"
-          subtitle={`↑ 12 vs last min`}
-        />
-        <KpiMini
-          label="Cars"
-          value={MOCK_VEHICLE_COUNTS[0].count.toString()}
-          icon={Car}
-          color="emerald"
-          subtitle={`${MOCK_VEHICLE_COUNTS[0].percentage}%`}
-        />
-        <KpiMini
-          label="Bikes"
-          value={MOCK_VEHICLE_COUNTS[1].count.toString()}
-          icon={Bike}
-          color="purple"
-          subtitle={`${MOCK_VEHICLE_COUNTS[1].percentage}%`}
-        />
-        <KpiMini
-          label="Buses"
-          value={MOCK_VEHICLE_COUNTS[2].count.toString()}
-          icon={Bus}
-          color="amber"
-          subtitle={`${MOCK_VEHICLE_COUNTS[2].percentage}%`}
-        />
-        <KpiMini
-          label="Trucks"
-          value={MOCK_VEHICLE_COUNTS[3].count.toString()}
-          icon={Truck}
-          color="red"
-          subtitle={`${MOCK_VEHICLE_COUNTS[3].percentage}%`}
-        />
-        <KpiMini
-          label="Traffic Density"
-          value={`${trafficDensity}%`}
-          icon={Activity}
-          color="amber"
-          subtitle={trafficDensity > 70 ? 'High' : trafficDensity > 40 ? 'Medium' : 'Low'}
-        />
-        <KpiMini
-          label="Queue Length"
-          value={`${queueLength}m`}
-          icon={Clock}
-          color="purple"
-          subtitle={`↑ 26m vs last min`}
-        />
-        <KpiMini
-          label="Confidence"
-          value={`${confidence.toFixed(0)}%`}
-          icon={Shield}
-          color="emerald"
-          subtitle={confidence > 90 ? 'Very High' : confidence > 70 ? 'High' : 'Medium'}
-        />
+        <KpiMini label="Vehicles Detected" value={totalVehicles.toString()} icon={Car} color="cyan" subtitle={`↑ 12 vs last min`} />
+        <KpiMini label="Cars" value={carKpi.count.toString()} icon={Car} color="emerald" subtitle={`${carKpi.percentage}%`} />
+        <KpiMini label="Bikes" value={bikeKpi.count.toString()} icon={Bike} color="purple" subtitle={`${bikeKpi.percentage}%`} />
+        <KpiMini label="Buses" value={busKpi.count.toString()} icon={Bus} color="amber" subtitle={`${busKpi.percentage}%`} />
+        <KpiMini label="Trucks" value={truckKpi.count.toString()} icon={Truck} color="red" subtitle={`${truckKpi.percentage}%`} />
+        <KpiMini label="Traffic Density" value={`${trafficDensity}%`} icon={Activity} color="amber" subtitle={trafficDensity > 70 ? 'High' : trafficDensity > 40 ? 'Medium' : 'Low'} />
+        <KpiMini label="Queue Length" value={`${queueLength}m`} icon={Clock} color="purple" subtitle={`↑ 26m vs last min`} />
+        <KpiMini label="Confidence" value={`${confidence.toFixed(0)}%`} icon={Shield} color="emerald" subtitle={confidence > 90 ? 'Very High' : confidence > 70 ? 'High' : 'Medium'} />
       </div>
 
       {/* ── Main Content Grid ── */}
@@ -318,36 +297,35 @@ export const AdminYoloVision: React.FC = () => {
                 <span className="text-[10px] font-mono font-bold text-emerald-400">LIVE</span>
               </div>
             </div>
-            
+
             {/* Camera Feed Area */}
             <div className="relative bg-slate-950 aspect-video">
-              {/* Simulated Camera Feed */}
               <div className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950">
                 {/* Grid overlay */}
                 <div className="absolute inset-0 opacity-10" style={{
                   backgroundImage: 'linear-gradient(rgba(34, 197, 94, 0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(34, 197, 94, 0.3) 1px, transparent 1px)',
                   backgroundSize: '40px 40px'
                 }} />
-                
+
                 {/* YOLO Detection Boxes */}
                 {detections.map((det) => (
                   <div
                     key={det.id}
                     className="absolute border-2 rounded"
                     style={{
-                      left: `${(det.x / 800) * 100}%`,
-                      top: `${(det.y / 400) * 100}%`,
-                      width: `${(det.width / 800) * 100}%`,
-                      height: `${(det.height / 400) * 100}%`,
-                      borderColor: VEHICLE_COLORS[det.type],
-                      backgroundColor: `${VEHICLE_COLORS[det.type]}20`,
+                      left: `${(det.bbox.x / 800) * 100}%`,
+                      top: `${(det.bbox.y / 400) * 100}%`,
+                      width: `${(det.bbox.width / 800) * 100}%`,
+                      height: `${(det.bbox.height / 400) * 100}%`,
+                      borderColor: BOX_COLORS[det.vehicle_type] || '#64748b',
+                      backgroundColor: `${BOX_COLORS[det.vehicle_type] || '#64748b'}20`,
                     }}
                   >
                     <span
                       className="absolute -top-5 left-0 px-1 py-0.5 text-[8px] font-mono font-bold rounded whitespace-nowrap"
-                      style={{ backgroundColor: VEHICLE_COLORS[det.type], color: '#000' }}
+                      style={{ backgroundColor: BOX_COLORS[det.vehicle_type] || '#64748b', color: '#000' }}
                     >
-                      {det.type} {det.confidence.toFixed(2)}
+                      {det.vehicle_type} {det.confidence.toFixed(2)}
                     </span>
                   </div>
                 ))}
@@ -365,15 +343,15 @@ export const AdminYoloVision: React.FC = () => {
 
               {/* Resolution */}
               <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/60 text-[9px] font-mono text-white rounded">
-                {selectedCamera.resolution}
+                {selectedCamera?.resolution || '1280x720'}
               </div>
             </div>
 
             {/* Camera Info Bar */}
             <div className="px-4 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono">
-              <span className="text-slate-400">Camera: <span className="text-slate-200">{selectedCamera.name}</span></span>
-              <span className="text-slate-400">Location: <span className="text-slate-200">{selectedCamera.location}</span></span>
-              <span className="text-slate-400">Resolution: <span className="text-slate-200">{selectedCamera.resolution}</span></span>
+              <span className="text-slate-400">Camera: <span className="text-slate-200">{selectedCamera?.name || 'Loading...'}</span></span>
+              <span className="text-slate-400">Location: <span className="text-slate-200">{selectedCamera?.location || '---'}</span></span>
+              <span className="text-slate-400">Resolution: <span className="text-slate-200">{selectedCamera?.resolution || '---'}</span></span>
             </div>
           </div>
 
@@ -398,9 +376,9 @@ export const AdminYoloVision: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {MOCK_VEHICLE_COUNTS.map((v) => (
-                      <tr key={v.type} className="border-b border-slate-800/50">
-                        <td className="py-2 text-slate-200 font-semibold">{v.type}</td>
+                    {vehicleCounts.length > 0 ? vehicleCounts.filter(vc => vc.count > 0 || vc.vehicle_type === 'car' || vc.vehicle_type === 'bike' || vc.vehicle_type === 'bus' || vc.vehicle_type === 'truck').map((v) => (
+                      <tr key={v.vehicle_type} className="border-b border-slate-800/50">
+                        <td className="py-2 text-slate-200 font-semibold">{v.label}</td>
                         <td className="py-2 text-right text-slate-200">{v.count}</td>
                         <td className="py-2 text-right text-slate-400">{v.percentage}%</td>
                         <td className="py-2 text-right">
@@ -409,7 +387,28 @@ export const AdminYoloVision: React.FC = () => {
                           {v.trend === 'stable' && <Minus className="w-3 h-3 text-slate-400 inline" />}
                         </td>
                       </tr>
-                    ))}
+                    )) : (
+                      // Fallback static rows
+                      <>
+                        {[
+                          { type: 'Cars', count: 42, percentage: 58.3, trend: 'up' as const },
+                          { type: 'Bikes', count: 18, percentage: 25.0, trend: 'up' as const },
+                          { type: 'Buses', count: 5, percentage: 6.9, trend: 'down' as const },
+                          { type: 'Trucks', count: 7, percentage: 9.7, trend: 'stable' as const },
+                        ].map((v) => (
+                          <tr key={v.type} className="border-b border-slate-800/50">
+                            <td className="py-2 text-slate-200 font-semibold">{v.type}</td>
+                            <td className="py-2 text-right text-slate-200">{v.count}</td>
+                            <td className="py-2 text-right text-slate-400">{v.percentage}%</td>
+                            <td className="py-2 text-right">
+                              {v.trend === 'up' && <TrendingUp className="w-3 h-3 text-emerald-400 inline" />}
+                              {v.trend === 'down' && <TrendingDown className="w-3 h-3 text-red-400 inline" />}
+                              {v.trend === 'stable' && <Minus className="w-3 h-3 text-slate-400 inline" />}
+                            </td>
+                          </tr>
+                        ))}
+                      </>
+                    )}
                     <tr className="font-bold">
                       <td className="py-2 text-slate-200">Total</td>
                       <td className="py-2 text-right text-cyan-400">{totalDetected}</td>
@@ -430,13 +429,18 @@ export const AdminYoloVision: React.FC = () => {
                 </h3>
               </div>
               <div className="p-4 space-y-3">
-                {MOCK_ALERTS.map((alert) => (
+                {(alerts.length > 0 ? alerts : [
+                  { id: '1', severity: 'critical' as const, title: 'High congestion detected', message: 'Density above 75% at ITO Flyover', timestamp: '21:54:40', camera_id: 'cam-01', auto_generated: true },
+                  { id: '2', severity: 'warning' as const, title: 'Queue length increasing', message: 'Queue length 186m and growing', timestamp: '21:54:20', camera_id: 'cam-01', auto_generated: true },
+                  { id: '3', severity: 'info' as const, title: 'Heavy truck detected', message: 'High truck count: 7', timestamp: '21:53:55', camera_id: 'cam-01', auto_generated: true },
+                  { id: '4', severity: 'success' as const, title: 'Camera quality good', message: 'Detection confidence stable at 92%', timestamp: '21:53:30', camera_id: 'cam-01', auto_generated: true },
+                ]).slice(0, 4).map((alert) => (
                   <div
                     key={alert.id}
                     className={`p-3 rounded-lg border ${
-                      alert.type === 'critical' ? 'bg-red-950/20 border-red-500/30' :
-                      alert.type === 'warning' ? 'bg-amber-950/20 border-amber-500/30' :
-                      alert.type === 'info' ? 'bg-blue-950/20 border-blue-500/30' :
+                      alert.severity === 'critical' ? 'bg-red-950/20 border-red-500/30' :
+                      alert.severity === 'warning' ? 'bg-amber-950/20 border-amber-500/30' :
+                      alert.severity === 'info' ? 'bg-blue-950/20 border-blue-500/30' :
                       'bg-emerald-950/20 border-emerald-500/30'
                     }`}
                   >
@@ -468,7 +472,7 @@ export const AdminYoloVision: React.FC = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={MOCK_VEHICLE_DISTRIBUTION}
+                      data={pieDistribution}
                       cx="50%"
                       cy="50%"
                       innerRadius={40}
@@ -477,24 +481,22 @@ export const AdminYoloVision: React.FC = () => {
                       dataKey="value"
                       stroke="none"
                     >
-                      {MOCK_VEHICLE_DISTRIBUTION.map((entry, idx) => (
+                      {pieDistribution.map((entry, idx) => (
                         <Cell key={idx} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }}
-                    />
+                    <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
               <div className="flex-1 space-y-2">
-                {MOCK_VEHICLE_DISTRIBUTION.map((v) => (
+                {pieDistribution.map((v) => (
                   <div key={v.name} className="flex items-center justify-between text-[10px] font-mono">
                     <div className="flex items-center gap-2">
                       <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: v.color }} />
                       <span className="text-slate-300">{v.name}</span>
                     </div>
-                    <span className="text-slate-100 font-bold">{v.value} ({((v.value / totalDetected) * 100).toFixed(1)}%)</span>
+                    <span className="text-slate-100 font-bold">{v.value} ({totalDetected > 0 ? ((v.value / totalDetected) * 100).toFixed(1) : '0.0'}%)</span>
                   </div>
                 ))}
               </div>
@@ -509,7 +511,13 @@ export const AdminYoloVision: React.FC = () => {
             </h3>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={MOCK_DENSITY_TREND}>
+                <AreaChart data={densityTrend.length > 0 ? densityTrend : [
+                  { time: '21:40', density: 55, queue: 120 },
+                  { time: '21:45', density: 62, queue: 140 },
+                  { time: '21:50', density: 71, queue: 165 },
+                  { time: '21:55', density: 78, queue: 186 },
+                  { time: '22:00', density: 72, queue: 170 },
+                ]}>
                   <defs>
                     <linearGradient id="densityGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
@@ -519,18 +527,8 @@ export const AdminYoloVision: React.FC = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="time" stroke="#475569" fontSize={9} tickLine={false} />
                   <YAxis stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="density"
-                    stroke="#f59e0b"
-                    fillOpacity={1}
-                    fill="url(#densityGradient)"
-                    name="Density %"
-                    strokeWidth={2}
-                  />
+                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }} />
+                  <Area type="monotone" dataKey="density" stroke="#f59e0b" fillOpacity={1} fill="url(#densityGradient)" name="Density %" strokeWidth={2} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -548,21 +546,18 @@ export const AdminYoloVision: React.FC = () => {
             </h3>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={MOCK_DENSITY_TREND}>
+                <LineChart data={densityTrend.length > 0 ? densityTrend : [
+                  { time: '21:40', density: 55, queue: 120 },
+                  { time: '21:45', density: 62, queue: 140 },
+                  { time: '21:50', density: 71, queue: 165 },
+                  { time: '21:55', density: 78, queue: 186 },
+                  { time: '22:00', density: 72, queue: 170 },
+                ]}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="time" stroke="#475569" fontSize={9} tickLine={false} />
                   <YAxis stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="queue"
-                    stroke="#a855f7"
-                    strokeWidth={2}
-                    dot={{ r: 3, fill: '#a855f7' }}
-                    name="Queue (m)"
-                  />
+                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '10px' }} />
+                  <Line type="monotone" dataKey="queue" stroke="#a855f7" strokeWidth={2} dot={{ r: 3, fill: '#a855f7' }} name="Queue (m)" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -583,17 +578,14 @@ export const AdminYoloVision: React.FC = () => {
             AI INSIGHT
           </h3>
           <p className="text-[10px] text-slate-300 font-mono leading-relaxed">
-            Traffic density is high due to increased vehicle inflow. Queue likely to grow by 15-20% in next 15 minutes.
+            {insightBundle?.insight?.summary || 'Traffic density is high due to increased vehicle inflow. Queue likely to grow by 15-20% in next 15 minutes.'}
           </p>
           <div className="flex items-center gap-2">
             <span className="text-[9px] font-mono text-slate-500">Confidence:</span>
             <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-cyan-500 rounded-full"
-                style={{ width: `${confidence}%` }}
-              />
+              <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${insightBundle?.insight?.confidence || confidence}%` }} />
             </div>
-            <span className="text-[9px] font-mono font-bold text-cyan-400">{confidence}%</span>
+            <span className="text-[9px] font-mono font-bold text-cyan-400">{(insightBundle?.insight?.confidence || confidence).toFixed(0)}%</span>
           </div>
         </div>
 
@@ -606,18 +598,18 @@ export const AdminYoloVision: React.FC = () => {
           <div className="grid grid-cols-3 gap-3">
             <div>
               <span className="text-[9px] text-slate-500 block">Predicted Density</span>
-              <span className="text-lg font-bold text-slate-100 font-mono">{Math.min(100, trafficDensity + 7)}%</span>
-              <span className="text-[9px] text-amber-400 block">High</span>
+              <span className="text-lg font-bold text-slate-100 font-mono">{insightBundle?.prediction?.predicted_density || Math.min(100, trafficDensity + 7)}%</span>
+              <span className="text-[9px] text-amber-400 block">{insightBundle?.prediction?.predicted_density_label || 'High'}</span>
             </div>
             <div>
               <span className="text-[9px] text-slate-500 block">Predicted Queue</span>
-              <span className="text-lg font-bold text-slate-100 font-mono">{queueLength + 34}m</span>
-              <span className="text-[9px] text-red-400 block">↑ 34m</span>
+              <span className="text-lg font-bold text-slate-100 font-mono">{insightBundle?.prediction?.predicted_queue_meters || queueLength + 34}m</span>
+              <span className="text-[9px] text-red-400 block">↑ {insightBundle?.prediction?.predicted_queue_delta_meters || 34}m</span>
             </div>
             <div>
               <span className="text-[9px] text-slate-500 block">Avg Speed</span>
-              <span className="text-lg font-bold text-slate-100 font-mono">18 km/h</span>
-              <span className="text-[9px] text-red-400 block">↓ 4 km/h</span>
+              <span className="text-lg font-bold text-slate-100 font-mono">{insightBundle?.prediction?.predicted_avg_speed_kmh || 18} km/h</span>
+              <span className="text-[9px] text-red-400 block">↓ {Math.abs(insightBundle?.prediction?.speed_delta_kmh || 4)} km/h</span>
             </div>
           </div>
         </div>
@@ -629,10 +621,10 @@ export const AdminYoloVision: React.FC = () => {
             RECOMMENDATION
           </h3>
           <p className="text-[10px] text-slate-300 font-mono leading-relaxed">
-            Increase green time on ITO signal by 12s and divert heavy vehicles via Ring Road.
+            {insightBundle?.recommendation?.text || 'Increase green time on ITO signal by 12s and divert heavy vehicles via Ring Road.'}
           </p>
           <button className="w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition-all">
-            Apply Recommendation
+            {insightBundle?.recommendation?.action_label || 'Apply Recommendation'}
           </button>
         </div>
 
@@ -645,19 +637,19 @@ export const AdminYoloVision: React.FC = () => {
           <div className="space-y-2 text-[10px] font-mono">
             <div className="flex justify-between">
               <span className="text-slate-500">Model:</span>
-              <span className="text-slate-200 font-bold">YOLOv8n</span>
+              <span className="text-slate-200 font-bold">{modelInfo?.model_name || 'YOLOv8n'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Dataset:</span>
-              <span className="text-slate-200">COCO + Custom Traffic</span>
+              <span className="text-slate-200">{modelInfo?.dataset || 'COCO + Custom Traffic'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Last Updated:</span>
-              <span className="text-slate-200">03 Sep 2025 20:18</span>
+              <span className="text-slate-200">{modelInfo?.last_updated ? new Date(modelInfo.last_updated).toLocaleDateString('en-IN') : '03 Sep 2025'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Inference:</span>
-              <span className="text-slate-200">Edge GPU (RTX 3050)</span>
+              <span className="text-slate-200">{modelInfo?.inference_device || 'Edge GPU (RTX 3050)'}</span>
             </div>
           </div>
         </div>
@@ -666,7 +658,7 @@ export const AdminYoloVision: React.FC = () => {
       {/* ── Footer ── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 flex items-center justify-between text-[10px] font-mono text-slate-500">
         <span>YOLO Vision uses AI to detect and classify vehicles in real-time. Data is processed locally and aggregated for digital twin.</span>
-        <span>Powered by AI • YOLOv8 • OpenCV • FastAPI</span>
+        <span>Powered by AI • {modelInfo?.model_name || 'YOLOv8'} • OpenCV • FastAPI</span>
       </div>
     </div>
   );
