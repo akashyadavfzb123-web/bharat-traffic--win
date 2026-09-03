@@ -19,6 +19,7 @@ import {
   FileSpreadsheet,
   BarChart3,
   Building2,
+  Eye,
   X,
 } from 'lucide-react';
 
@@ -30,6 +31,7 @@ interface SidebarItem {
   label: string;
   path: string;
   icon: React.ComponentType<{ className?: string }>;
+  badge?: string;
 }
 
 interface SidebarGroup {
@@ -49,6 +51,7 @@ const ADMIN_GROUPS: SidebarGroup[] = [
     items: [
       { label: 'Live Traffic', path: '/admin/live-traffic', icon: Map },
       { label: 'Digital Twin', path: '/admin/digital-twin', icon: Cpu },
+      { label: 'YOLO Vision', path: '/admin/yolo-vision', icon: Eye, badge: 'NEW' },
       { label: 'Predictions', path: '/admin/predictions', icon: TrendingUp },
     ],
   },
@@ -149,7 +152,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ onItemClick }) => {
                       }
                     >
                       <Icon className="w-4 h-4" />
-                      <span>{item.label}</span>
+                      <span className="flex-1">{item.label}</span>
+                      {item.badge && (
+                        <span className="px-1.5 py-0.5 text-[8px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded">
+                          {item.badge}
+                        </span>
+                      )}
                     </NavLink>
                   );
                 })}

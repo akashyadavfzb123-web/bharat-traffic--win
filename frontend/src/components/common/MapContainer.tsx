@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Junction, Incident, RouteOption, DigitalTwinNode } from '../../types/traffic';
 import type { RoadGeoJSONCollection, RoadSegmentProperties } from '../../data/mockGeoJSON';
+import type { SyntheticCamera, SyntheticSensor, SyntheticBusStop, SyntheticMetroStation } from '../../types/synthetic';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
 import { fetchRoadGeometry } from '../../services/roadGeometryService';
@@ -12,9 +13,9 @@ import {
   Search,
   MapPin,
   X,
-  Zap,
   Globe,
   ChevronDown,
+  Zap,
 } from 'lucide-react';
 
 interface GreenCorridor {
@@ -40,11 +41,17 @@ interface MapProps {
   greenCorridors?: GreenCorridor[];
   selectedRoadId?: string | null;
   selectedJunctionId?: string | null;
+  selectedRouteId?: string | null;
   onRoadClick?: (road: RoadSegmentProperties) => void;
   onJunctionClick?: (junction: Junction) => void;
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
+  /** Synthetic data objects from SyntheticTrafficProvider */
+  cameras?: SyntheticCamera[];
+  sensors?: SyntheticSensor[];
+  busStops?: SyntheticBusStop[];
+  metroStations?: SyntheticMetroStation[];
 }
 
 type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets';
@@ -123,42 +130,80 @@ export const MapContainer: React.FC<MapProps> = ({
   incidents = [],
   routes = [],
   roadGeoJSON,
+  selectedRouteId,
   greenCorridors = [],
   onRoadClick,
   onJunctionClick,
   center,
   zoom = 12,
   interactive = true,
+  cameras = [],
+  sensors = [],
+  busStops = [],
+  metroStations = [],
 }) => {
   const { selectedCity, setSelectedCity } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const isMapLoadedRef = useRef<boolean>(false);
+
+  // Persistent marker references to prevent DOM tearing / marker blinking
+  const junctionMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement; popup: maplibregl.Popup }>>(new Map());
+  const vehicleMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement; popup: maplibregl.Popup }>>(new Map());
+  const incidentMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const cameraMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const sensorMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const busStopMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const metroMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const searchMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
-  const [showTrafficLayer, setShowTrafficLayer] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
   const [showCityMenu, setShowCityMenu] = useState(false);
+  const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+
+  // Refs that hold the latest props for use in callbacks without re-creating the map
+  const onRoadClickRef = useRef(onRoadClick);
+  const onJunctionClickRef = useRef(onJunctionClick);
+  useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
+  useEffect(() => { onJunctionClickRef.current = onJunctionClick; }, [onJunctionClick]);
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
 
-  // ── Refs that hold the latest props for use in callbacks without re-creating the map
-  const junctionsRef = useRef(junctions);
-  const incidentsRef = useRef(incidents);
-  const onJunctionClickRef = useRef(onJunctionClick);
-  const onRoadClickRef = useRef(onRoadClick);
-  const cityConfigRef = useRef(cityConfig);
-  const selectedCityRef = useRef(selectedCity);
+  // Clear all markers helper
+  const clearAllMarkers = () => {
+    junctionMarkersRef.current.forEach((item) => item.marker.remove());
+    junctionMarkersRef.current.clear();
 
-  useEffect(() => { junctionsRef.current = junctions; }, [junctions]);
-  useEffect(() => { incidentsRef.current = incidents; }, [incidents]);
-  useEffect(() => { onJunctionClickRef.current = onJunctionClick; }, [onJunctionClick]);
-  useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
-  useEffect(() => { cityConfigRef.current = cityConfig; }, [cityConfig]);
-  useEffect(() => { selectedCityRef.current = selectedCity; }, [selectedCity]);
+    vehicleMarkersRef.current.forEach((item) => item.marker.remove());
+    vehicleMarkersRef.current.clear();
+
+    incidentMarkersRef.current.forEach((item) => item.marker.remove());
+    incidentMarkersRef.current.clear();
+
+    cameraMarkersRef.current.forEach((item) => item.marker.remove());
+    cameraMarkersRef.current.clear();
+
+    sensorMarkersRef.current.forEach((item) => item.marker.remove());
+    sensorMarkersRef.current.clear();
+
+    busStopMarkersRef.current.forEach((item) => item.marker.remove());
+    busStopMarkersRef.current.clear();
+
+    metroMarkersRef.current.forEach((item) => item.marker.remove());
+    metroMarkersRef.current.clear();
+
+    routeMarkersRef.current.forEach((m) => m.remove());
+    routeMarkersRef.current = [];
+
+    searchMarkersRef.current.forEach((m) => m.remove());
+    searchMarkersRef.current = [];
+  };
 
   // Handle Location Search
   useEffect(() => {
@@ -179,7 +224,12 @@ export const MapContainer: React.FC<MapProps> = ({
     setShowCityMenu(false);
     const targetCity = CITIES[cityName];
     if (mapRef.current && targetCity) {
-      mapRef.current.flyTo({ center: targetCity.center, zoom: targetCity.zoom, speed: 1.2 });
+      clearAllMarkers();
+      mapRef.current.flyTo({
+        center: targetCity.center,
+        zoom: targetCity.zoom,
+        speed: 1.2,
+      });
     }
   }, [setSelectedCity]);
 
@@ -193,19 +243,27 @@ export const MapContainer: React.FC<MapProps> = ({
     const lat = parseFloat(res.lat);
     const lng = parseFloat(res.lon);
     if (!isNaN(lat) && !isNaN(lng) && mapRef.current) {
-      mapRef.current.flyTo({ center: [lng, lat], zoom: 14, speed: 1.5 });
-      new maplibregl.Marker({ color: '#06b6d4' })
+      mapRef.current.flyTo({
+        center: [lng, lat],
+        zoom: 14,
+        speed: 1.5,
+      });
+
+      const m = new maplibregl.Marker({ color: '#06b6d4' })
         .setLngLat([lng, lat])
         .setPopup(new maplibregl.Popup().setHTML(`<b style="color: #0284c7;">${res.display_name}</b>`))
         .addTo(mapRef.current);
+      searchMarkersRef.current.push(m);
     }
     setSearchResults([]);
     setSearchQuery('');
   }, []);
 
-  // ── Map lifecycle: create ONCE, destroy ONCE ──
+  // 1. Initialize Map ONCE per container / currentStyle / selectedCity
   useEffect(() => {
     if (!mapContainerRef.current) return;
+    isMapLoadedRef.current = false;
+    clearAllMarkers();
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -356,6 +414,8 @@ export const MapContainer: React.FC<MapProps> = ({
       const layerId = `route-layer-${route.id}`;
       if (map.getSource(sourceId)) return; // already added
 
+      const isSelected = selectedRouteId === route.id;
+
       map.addSource(sourceId, {
         type: 'geojson',
         data: {
@@ -370,10 +430,11 @@ export const MapContainer: React.FC<MapProps> = ({
         source: sourceId,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': route.isRecommended ? '#06b6d4'
+          'line-color': isSelected ? '#06b6d4'
+            : route.isRecommended ? '#06b6d4'
             : route.congestionLevel === 'severe' ? '#ef4444' : '#f59e0b',
-          'line-width': route.isRecommended ? 6 : 4,
-          'line-opacity': 0.85,
+          'line-width': isSelected ? 7 : route.isRecommended ? 6 : 4,
+          'line-opacity': selectedRouteId ? (isSelected ? 1.0 : 0.35) : 0.85,
         },
       });
     });
@@ -553,9 +614,69 @@ export const MapContainer: React.FC<MapProps> = ({
     });
   }
 
+  function addSyntheticMarkers(map: maplibregl.Map) {
+    cameras.forEach((cam) => {
+      if (cameraMarkersRef.current.has(cam.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'camera';
+      el.className = 'w-5 h-5 rounded bg-blue-900/80 border border-blue-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '📷';
+      el.title = cam.name;
+      new maplibregl.Marker(el)
+        .setLngLat([cam.lng, cam.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#38bdf8;'>${cam.name}</b><br/>Type: ${cam.type}<br/>Status: ${cam.status}`))
+        .addTo(map);
+      cameraMarkersRef.current.set(cam.id, { marker: null as any, el });
+    });
+    sensors.forEach((sens) => {
+      if (sensorMarkersRef.current.has(sens.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'sensor';
+      el.className = 'w-5 h-5 rounded bg-purple-900/80 border border-purple-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '📡';
+      el.title = sens.name;
+      new maplibregl.Marker(el)
+        .setLngLat([sens.lng, sens.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#a855f7;'>${sens.name}</b><br/>Type: ${sens.type}<br/>Reading: ${sens.reading}`))
+        .addTo(map);
+      sensorMarkersRef.current.set(sens.id, { marker: null as any, el });
+    });
+    busStops.forEach((b) => {
+      if (busStopMarkersRef.current.has(b.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'busstop';
+      el.className = 'w-5 h-5 rounded bg-cyan-800/80 border border-cyan-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '🚌';
+      new maplibregl.Marker(el)
+        .setLngLat([b.lng, b.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#22d3ee;'>${b.name}</b><br/>Routes: ${b.routes.join(', ')}`))
+        .addTo(map);
+      busStopMarkersRef.current.set(b.id, { marker: null as any, el });
+    });
+    metroStations.forEach((m) => {
+      if (metroMarkersRef.current.has(m.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'metro';
+      el.className = 'w-5 h-5 rounded bg-emerald-800/80 border border-emerald-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '🚇';
+      new maplibregl.Marker(el)
+        .setLngLat([m.lng, m.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#34d399;'>${m.name}</b><br/>Line: ${m.line}`))
+        .addTo(map);
+      metroMarkersRef.current.set(m.id, { marker: null as any, el });
+    });
+  }
+
+  // Update synthetic markers (cameras, sensors, bus stops, metro)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addSyntheticMarkers(map);
+  }, [cameras, sensors, busStops, metroStations]);
+
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
-      {/* Top Map Header Control Bar: 4-City Tabs + Search + Style Menu */}
+      {/* Top Map Header Control Bar: 4-City Tabs + Search + Toggles + Style Menu */}
       <div className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0">
         {/* When search is focused: full-width search bar. Otherwise: normal layout */}
         {showSuggestions ? (

@@ -35,3 +35,24 @@ def decode_access_token(token: str) -> dict:
     Raises jwt.InvalidTokenError (incl. ExpiredSignatureError) on any failure.
     """
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+
+
+def decode_access_token_allow_expired(token: str) -> dict | None:
+    """Decode a JWT even if expired. Returns None on any other error."""
+    try:
+        return jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_exp": False},
+        )
+    except jwt.InvalidTokenError:
+        return None
+
+
+def verify_token(token: str) -> dict | None:
+    """Decode and verify a JWT, returning the payload or None on failure."""
+    try:
+        return decode_access_token(token)
+    except jwt.InvalidTokenError:
+        return None

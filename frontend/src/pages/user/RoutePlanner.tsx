@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { trafficService } from '../../services/api';
+import React, { useEffect, useState, useCallback } from 'react';
 import type { RouteOption } from '../../types/traffic';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { LoadingState } from '../../components/LoadingState';
+import { useApp } from '../../context/AppContext';
+import { CITIES } from '../../data/cityData';
+import { generateRoutes, routeScore } from '../../utils/routeGenerator';
+import { mapSearchService } from '../../services/mapApi';
 import {
   Navigation,
   MapPin,
@@ -14,44 +16,125 @@ import {
   Bike,
   Bus,
   Zap,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const UserRoutePlanner: React.FC = () => {
-  const [fromLocation, setFromLocation] = useState('Koramangala 5th Block, Bengaluru');
-  const [toLocation, setToLocation] = useState('Whitefield ITPL, Bengaluru');
+  const { selectedCity } = useApp();
+  const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
+
+  const [fromLocation, setFromLocation] = useState(cityConfig.defaultOrigin);
+  const [toLocation, setToLocation] = useState(cityConfig.defaultDestination);
   const [travelMode, setTravelMode] = useState<'car' | 'bike' | 'transit'>('car');
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
-  const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
+  const [geocodingError, setGeocodingError] = useState<string | null>(null);
+  const [routingSource, setRoutingSource] = useState<'osrm' | 'mock' | null>(null);
 
-  const fetchRoutes = async (origin: string, destination: string) => {
-    try {
-      const res = await trafficService.getRouteOptions(origin, destination);
-      setRoutes(res);
-      const best = res.find((r) => r.isRecommended) || res[0];
-      setSelectedRoute(best);
-    } finally {
-      setLoading(false);
-      setCalculating(false);
-    }
-  };
+  // ── Generate routes from geocoded locations ────────────────────────
+  const calculateRoutes = useCallback(
+    async (origin: string, destination: string) => {
+      setGeocodingError(null);
+      setCalculating(true);
 
+      try {
+        // Geocode origin
+        const originResults = await mapSearchService.searchLocations(origin, selectedCity);
+        if (originResults.length === 0) {
+          setGeocodingError(`Could not find location: "${origin}". Try a more specific name.`);
+          setCalculating(false);
+          return;
+        }
+
+        // Geocode destination
+        const destResults = await mapSearchService.searchLocations(destination, selectedCity);
+        if (destResults.length === 0) {
+          setGeocodingError(`Could not find location: "${destination}". Try a more specific name.`);
+          setCalculating(false);
+          return;
+        }
+
+        const originCoords: [number, number] = [
+          parseFloat(originResults[0].lon),
+          parseFloat(originResults[0].lat),
+        ];
+        const destCoords: [number, number] = [
+          parseFloat(destResults[0].lon),
+          parseFloat(destResults[0].lat),
+        ];
+
+        // Generate 3 routes (OSRM real routing, with mock fallback)
+        let generated: Awaited<ReturnType<typeof generateRoutes>>;
+        let source: 'osrm' | 'mock' = 'mock';
+        try {
+          // Attempt real OSRM routing
+          const { fetchOSRMRoutes } = await import('../../services/routingApi');
+          generated = await fetchOSRMRoutes({
+            origin: originCoords,
+            destination: destCoords,
+            originName: origin,
+            destinationName: destination,
+            city: selectedCity,
+          });
+          source = 'osrm';
+        } catch {
+          // OSRM unavailable — use mock fallback
+          generated = await generateRoutes({
+            origin: originCoords,
+            destination: destCoords,
+            originName: origin,
+            destinationName: destination,
+            city: selectedCity,
+          });
+          source = 'mock';
+        }
+        setRoutingSource(source);
+
+        // Find best route (lowest score = best ETA + congestion combo)
+        let bestIdx = 0;
+        let bestScore = Infinity;
+        generated.forEach((r, i) => {
+          const s = routeScore(r);
+          if (s < bestScore) {
+            bestScore = s;
+            bestIdx = i;
+          }
+        });
+
+        // Mark the best route
+        const finalRoutes = generated.map((r, i) => ({
+          ...r,
+          isRecommended: i === bestIdx,
+        }));
+
+        setRoutes(finalRoutes);
+        setSelectedRoute(finalRoutes[bestIdx]);
+      } catch {
+        setGeocodingError('Something went wrong. Please try again.');
+      } finally {
+        setCalculating(false);
+      }
+    },
+    [selectedCity],
+  );
+
+  // ── Sync defaults when city changes ────────────────────────────────
   useEffect(() => {
-    fetchRoutes(fromLocation, toLocation);
-  }, []);
+    setFromLocation(cityConfig.defaultOrigin);
+    setToLocation(cityConfig.defaultDestination);
+    // Auto-calculate for the new city's defaults
+    calculateRoutes(cityConfig.defaultOrigin, cityConfig.defaultDestination);
+  }, [selectedCity, cityConfig, calculateRoutes]);
 
+  // ── Handle form submit ─────────────────────────────────────────────
   const handleCalculate = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCalculating(true);
-    await fetchRoutes(fromLocation, toLocation);
+    if (!fromLocation.trim() || !toLocation.trim()) return;
+    await calculateRoutes(fromLocation.trim(), toLocation.trim());
   };
 
-  if (loading) {
-    return <LoadingState message="Calculating optimal traffic-free bypass routes..." />;
-  }
-
-  const recommendedRoute = routes.find((r) => r.isRecommended) || routes[0];
+  const recommendedRoute = routes.find((r) => r.isRecommended) || routes[0] || null;
   const alternativeRoutes = routes.filter((r) => !r.isRecommended);
 
   return (
@@ -61,14 +144,19 @@ export const UserRoutePlanner: React.FC = () => {
         <div className="flex items-center gap-2">
           <h2 className="text-xl font-extrabold text-slate-100 font-mono flex items-center gap-2">
             <Navigation className="w-5 h-5 text-cyan-400" />
-            Smart Route Planner & Traffic Avoidance
+            Smart Route Planner & Traffic Avoidance ({selectedCity.toUpperCase()})
           </h2>
           <Badge color="cyan" dot>
-            AI Routing Matrix
+            AI ROUTING MATRIX
           </Badge>
+          {routingSource && (
+            <Badge color={routingSource === 'osrm' ? 'emerald' : 'amber'}>
+              {routingSource === 'osrm' ? '● OSRM LIVE ROUTING' : '● MOCK ROUTING'}
+            </Badge>
+          )}
         </div>
         <p className="text-xs text-slate-400 mt-0.5">
-          Enter starting location and destination to compare traffic-aware routes, distance, ETA, and time saved.
+          Enter starting location and destination in {selectedCity} to compare traffic-aware routes, distance, ETA, and time saved.
         </p>
       </div>
 
@@ -80,7 +168,7 @@ export const UserRoutePlanner: React.FC = () => {
             header={
               <div className="flex items-center gap-2 font-mono text-xs font-bold text-slate-200 uppercase">
                 <Sparkles className="w-4 h-4 text-cyan-400" />
-                <span>Calculate Journey Route</span>
+                <span>Calculate Journey Route ({selectedCity})</span>
               </div>
             }
           >
@@ -94,7 +182,7 @@ export const UserRoutePlanner: React.FC = () => {
                   type="text"
                   value={fromLocation}
                   onChange={(e) => setFromLocation(e.target.value)}
-                  placeholder="Enter starting location"
+                  placeholder="e.g. Koramangala 5th Block, Bengaluru"
                   className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
                   required
                 />
@@ -109,11 +197,18 @@ export const UserRoutePlanner: React.FC = () => {
                   type="text"
                   value={toLocation}
                   onChange={(e) => setToLocation(e.target.value)}
-                  placeholder="Enter destination location"
+                  placeholder="e.g. Whitefield ITPL, Bengaluru"
                   className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
                   required
                 />
               </div>
+
+              {/* Geocoding Error */}
+              {geocodingError && (
+                <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-[11px] font-mono">
+                  {geocodingError}
+                </div>
+              )}
 
               {/* Mode Toggle */}
               <div>
@@ -176,7 +271,7 @@ export const UserRoutePlanner: React.FC = () => {
           {/* 2. Recommended Route Section */}
           <div>
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono block mb-2">
-              Recommended Route
+              Recommended Route ({selectedCity})
             </span>
             {recommendedRoute && (
               <div
@@ -197,7 +292,7 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Via: {recommendedRoute.viaRoads.join(' → ')}
+                  Via: {(recommendedRoute?.viaRoads || []).join(' → ')}
                 </p>
 
                 {/* Key Metrics: Distance, ETA, Traffic Condition, Time Saved */}
@@ -210,8 +305,22 @@ export const UserRoutePlanner: React.FC = () => {
                   </div>
                   <div className="p-2 bg-slate-950 rounded-lg">
                     <span className="text-slate-400 text-[10px]">Traffic Condition:</span>
-                    <div className="font-bold text-emerald-400 capitalize">
-                      {recommendedRoute.congestionLevel} Flow
+                    <div className={`font-bold capitalize ${
+                      recommendedRoute.congestionLevel === 'clear'
+                        ? 'text-emerald-400'
+                        : recommendedRoute.congestionLevel === 'moderate'
+                        ? 'text-amber-400'
+                        : recommendedRoute.congestionLevel === 'heavy'
+                        ? 'text-orange-400'
+                        : 'text-red-400'
+                    }`}>
+                      {recommendedRoute.congestionLevel === 'clear'
+                        ? 'Clear Flow'
+                        : recommendedRoute.congestionLevel === 'moderate'
+                        ? 'Moderate Traffic'
+                        : recommendedRoute.congestionLevel === 'heavy'
+                        ? 'Heavy Congestion'
+                        : 'Severe Gridlock'}
                     </div>
                   </div>
                 </div>
@@ -252,6 +361,8 @@ export const UserRoutePlanner: React.FC = () => {
                         ? 'red'
                         : rt.congestionLevel === 'heavy'
                         ? 'amber'
+                        : rt.congestionLevel === 'moderate'
+                        ? 'amber'
                         : 'cyan'
                     }
                     size="sm"
@@ -261,13 +372,20 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-[11px] text-slate-400 mt-1 font-mono">
-                  Via: {rt.viaRoads.join(', ')}
+                  Via: {(rt?.viaRoads || []).join(', ')}
                 </p>
 
                 <div className="mt-2.5 flex items-center justify-between text-xs font-mono pt-2 border-t border-slate-800">
                   <span className="text-slate-400">Distance: <strong className="text-slate-200">{rt.distanceKm} km</strong></span>
                   <span className="text-slate-400">ETA: <strong className="text-slate-200">{rt.durationMin} mins</strong></span>
                 </div>
+
+                {rt.timeSavedMin > 0 && (
+                  <div className="mt-2 flex items-center gap-1 text-[10px] font-mono text-emerald-400">
+                    <Zap className="w-3 h-3" />
+                    +{rt.timeSavedMin} mins saved
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -280,9 +398,14 @@ export const UserRoutePlanner: React.FC = () => {
             <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex flex-wrap justify-between items-center gap-3">
               <div>
                 <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider block">
-                  Currently Viewing Route Geometry
+                  Currently Viewing Route Geometry ({selectedCity})
                 </span>
-                <h3 className="text-sm font-bold text-slate-100">{selectedRoute.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-100">{selectedRoute.name}</h3>
+                  {selectedRoute.isRecommended && (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-3 font-mono text-xs">
@@ -295,13 +418,38 @@ export const UserRoutePlanner: React.FC = () => {
                   <span className="text-slate-400 text-[10px] block">Distance</span>
                   <span className="font-bold text-slate-200">{selectedRoute.distanceKm} km</span>
                 </div>
+                <div className="h-6 w-[1px] bg-slate-800" />
+                <div className="text-right">
+                  <span className="text-slate-400 text-[10px] block">Traffic</span>
+                  <span className={`font-bold capitalize ${
+                    selectedRoute.congestionLevel === 'clear'
+                      ? 'text-emerald-400'
+                      : selectedRoute.congestionLevel === 'moderate'
+                      ? 'text-amber-400'
+                      : 'text-red-400'
+                  }`}>
+                    {selectedRoute.congestionLevel}
+                  </span>
+                </div>
+                {selectedRoute.timeSavedMin > 0 && (
+                  <>
+                    <div className="h-6 w-[1px] bg-slate-800" />
+                    <div className="text-right">
+                      <span className="text-slate-400 text-[10px] block">Time Saved</span>
+                      <span className="font-bold text-emerald-400">+{selectedRoute.timeSavedMin} mins</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
 
           {/* MapLibre Container */}
           <div className="flex-1 min-h-[440px]">
-            <MapContainer routes={selectedRoute ? [selectedRoute] : routes} />
+            <MapContainer
+              routes={routes}
+              selectedRouteId={selectedRoute?.id ?? null}
+            />
           </div>
         </div>
       </div>

@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { trafficService } from '../../services/api';
 import type { Incident } from '../../types/traffic';
 import { useRealtime } from '../../context/RealtimeContext';
-import { MOCK_ROAD_GEOJSON } from '../../data/mockGeoJSON';
+import { getSyntheticTrafficData } from '../../services/syntheticTrafficProvider';
+import type { SyntheticTrafficData } from '../../types/synthetic';
 import type { RoadSegmentProperties } from '../../data/mockGeoJSON';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Card } from '../../components/Card';
@@ -20,20 +21,69 @@ import {
   Navigation,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useApp } from '../../context/AppContext';
 
 export const UserLiveTraffic: React.FC = () => {
   const { wsConnected, wsMode } = useRealtime();
+  const { selectedCity } = useApp();
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [selectedRoad, setSelectedRoad] = useState<RoadSegmentProperties | null>(
-    MOCK_ROAD_GEOJSON.features[0].properties
-  );
+  const [selectedRoad, setSelectedRoad] = useState<RoadSegmentProperties | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Generate synthetic traffic data for the current city (deterministic per city)
+  const synthData: SyntheticTrafficData = useMemo(
+    () => getSyntheticTrafficData(selectedCity),
+    [selectedCity]
+  );
+
+  // Reset selected road when city changes
+  useEffect(() => {
+    setSelectedRoad(null);
+  }, [selectedCity]);
 
   useEffect(() => {
     trafficService.getIncidents().then(setIncidents);
   }, []);
 
-  const roadList = MOCK_ROAD_GEOJSON.features.map((f) => f.properties);
+  // Merge synthetic incidents with API incidents for display
+  const allIncidents: Incident[] = useMemo(() => {
+    const syntheticIncidents: Incident[] = synthData.incidents.map((inc) => ({
+      id: inc.id,
+      title: inc.title,
+      locationName: inc.locationName,
+      lat: inc.lat,
+      lng: inc.lng,
+      severity: inc.severity,
+      type: inc.type,
+      status: 'reported' as const,
+      reportedAt: inc.reportedAt,
+      description: `${inc.title} at ${inc.locationName}`,
+      impactedLanes: inc.severity === 'critical' ? 3 : inc.severity === 'high' ? 2 : 1,
+      estimatedDelayMin: inc.estimatedDelayMin,
+    }));
+    // Combine, avoiding duplicates by id
+    const existingIds = new Set(syntheticIncidents.map((i) => i.id));
+    const apiIncidents = incidents.filter((i) => !existingIds.has(i.id));
+    return [...syntheticIncidents, ...apiIncidents];
+  }, [synthData, incidents]);
+
+  // Convert synthetic roads to RoadSegmentProperties for the road list
+  const roadList: RoadSegmentProperties[] = useMemo(() => {
+    return synthData.roads.map((r) => ({
+      id: r.id,
+      name: r.roadName,
+      corridor: `${selectedCity} Arterial`,
+      congestion: r.congestion,
+      avgSpeedKmh: r.speed,
+      densityVehKm: Math.round(r.vehicleCount * 0.6),
+      roadStatus: r.congestion > 70 ? 'Gridlock' as const : r.congestion > 40 ? 'Heavy Congestion' as const : r.congestion > 20 ? 'Slow Traffic' as const : 'Clear' as const,
+      incidentCount: 0,
+      laneCount: 3,
+      lengthKm: Math.round(r.coordinates.length * 1.2),
+      lastUpdated: 'SYNTHETIC',
+    }));
+  }, [synthData, selectedCity]);
+
   const filteredRoads = roadList.filter(
     (r) =>
       r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -53,12 +103,15 @@ export const UserLiveTraffic: React.FC = () => {
             <Badge color="cyan" dot>
               GeoJSON Vector Layer
             </Badge>
+            <Badge color="amber" dot>
+              SYNTHETIC DEMO
+            </Badge>
             <Badge color={wsConnected ? 'emerald' : 'amber'} dot>
               {wsMode === 'websocket' ? 'Live WS' : wsMode === 'rest' ? 'REST Poll' : 'Offline'}
             </Badge>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            Inspect real-time traffic density, average speeds, road congestion indices, and active hazards. Click any road segment to view telemetry.
+            Inspect {selectedCity} synthetic traffic density, average speeds, road congestion indices, and active hazards. Click any road segment to view telemetry.
           </p>
         </div>
 
@@ -80,8 +133,12 @@ export const UserLiveTraffic: React.FC = () => {
         {/* MapLibre GeoJSON Container */}
         <div className="lg:col-span-3 h-full relative">
           <MapContainer
-            roadGeoJSON={MOCK_ROAD_GEOJSON}
-            incidents={incidents}
+            roadGeoJSON={synthData.roadsGeoJSON as any}
+            incidents={allIncidents}
+            cameras={synthData.cameras}
+            sensors={synthData.sensors}
+            busStops={synthData.busStops}
+            metroStations={synthData.metroStations}
             onRoadClick={(road) => setSelectedRoad(road)}
             selectedRoadId={selectedRoad?.id}
           />
@@ -89,6 +146,49 @@ export const UserLiveTraffic: React.FC = () => {
 
         {/* Right Side Inspector & Segment List */}
         <div className="flex flex-col gap-4 overflow-hidden">
+          {/* Synthetic Stats Card */}
+          <Card
+            variant="command"
+            header={
+              <div className="flex items-center justify-between w-full">
+                <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5" />
+                  {selectedCity} Stats
+                </span>
+                <span className="text-[9px] text-amber-500/80 font-mono bg-amber-500/10 px-1.5 py-0.5 rounded">SYNTHETIC</span>
+              </div>
+            }
+          >
+            <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Avg Speed</span>
+                <span className="text-sm font-bold text-slate-100">{synthData.stats.avgSpeedKmh} km/h</span>
+              </div>
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Congestion</span>
+                <span className={`text-sm font-bold ${synthData.stats.congestionIndex > 70 ? 'text-red-400' : synthData.stats.congestionIndex > 40 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {synthData.stats.congestionIndex}%
+                </span>
+              </div>
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Cameras</span>
+                <span className="text-sm font-bold text-blue-400">{synthData.stats.totalCameras}</span>
+              </div>
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Sensors</span>
+                <span className="text-sm font-bold text-purple-400">{synthData.stats.totalSensors}</span>
+              </div>
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Incidents</span>
+                <span className="text-sm font-bold text-red-400">{synthData.stats.totalIncidents}</span>
+              </div>
+              <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
+                <span className="text-[10px] text-slate-400">Junctions</span>
+                <span className="text-sm font-bold text-cyan-400">{synthData.stats.totalJunctions}</span>
+              </div>
+            </div>
+          </Card>
+
           {/* Selected Road Telemetry Inspector Card */}
           {selectedRoad ? (
             <Card
@@ -182,6 +282,11 @@ export const UserLiveTraffic: React.FC = () => {
                       {selectedRoad.incidentCount} Active
                     </span>
                   </div>
+                </div>
+
+                {/* Data Source */}
+                <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-[10px] font-bold text-center">
+                  Data Source: SYNTHETIC DEMO
                 </div>
 
                 {/* Bypass Action Button */}

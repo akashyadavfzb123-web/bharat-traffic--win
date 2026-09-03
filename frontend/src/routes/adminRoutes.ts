@@ -19,6 +19,7 @@ export const ADMIN_ROUTES: RouteConfig[] = [
   { path: '/admin/overview', name: 'Overview', module: 'overview' },
   { path: '/admin/live-traffic', name: 'Live Traffic', module: 'monitoring' },
   { path: '/admin/digital-twin', name: 'Digital Twin', module: 'monitoring' },
+  { path: '/admin/yolo-vision', name: 'YOLO Vision', module: 'monitoring' },
   { path: '/admin/predictions', name: 'Predictions', module: 'monitoring' },
   { path: '/admin/signal-optimization', name: 'Signal Optimization', module: 'optimization' },
   { path: '/admin/what-if', name: 'What-If Scenarios', module: 'optimization' },

@@ -17,6 +17,7 @@ const MODULE_TITLES: Record<string, string> = {
   '/admin/overview': 'Command Overview',
   '/admin/live-traffic': 'Live Traffic Monitor',
   '/admin/digital-twin': 'Digital Twin Simulation',
+  '/admin/yolo-vision': 'YOLO Vision',
   '/admin/predictions': 'AI Predictions',
   '/admin/signal-optimization': 'Signal Optimization',
   '/admin/what-if': 'What-If Scenarios',

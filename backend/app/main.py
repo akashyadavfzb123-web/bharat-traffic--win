@@ -16,6 +16,8 @@ from app.api.simulations import router as simulations_router
 from app.api.sumo import router as sumo_router
 from app.api.traffic import router as traffic_router
 from app.api.ws_traffic import router as ws_router
+from app.api.yolo_vision import router as yolo_router
+from app.api.ws_yolo import router as ws_yolo_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, unhandled_error_handler
 from app.core.logging_config import logger, setup_logging
@@ -24,9 +26,17 @@ setup_logging(debug=settings.DEBUG)
 
 app = FastAPI(title=settings.APP_NAME, docs_url="/docs" if settings.DEBUG else None, redoc_url=None)
 
+# Comprehensive CORS Configuration for Vercel & Localhost
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://bharat-traffic-win.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=origins + settings.CORS_ORIGINS,
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
@@ -49,6 +59,8 @@ app.include_router(incidents_router)
 app.include_router(analytics_router)
 app.include_router(sumo_router)
 app.include_router(ws_router)
+app.include_router(yolo_router)
+app.include_router(ws_yolo_router)
 
 
 @app.middleware("http")

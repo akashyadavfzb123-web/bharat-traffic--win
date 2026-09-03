@@ -20,6 +20,7 @@ import { UserSettings } from '../pages/user/Settings';
 import { AdminOverview } from '../pages/admin/Overview';
 import { AdminLiveTraffic } from '../pages/admin/LiveTraffic';
 import { AdminDigitalTwin } from '../pages/admin/DigitalTwin';
+import { AdminYoloVision } from '../pages/admin/YoloVision';
 import { AdminPredictions } from '../pages/admin/Predictions';
 import { AdminSignalOptimization } from '../pages/admin/SignalOptimization';
 import { AdminWhatIfScenarios } from '../pages/admin/WhatIfScenarios';
@@ -60,6 +61,7 @@ export const AppRoutes: React.FC = () => {
           <Route path="/admin/overview" element={<AdminOverview />} />
           <Route path="/admin/live-traffic" element={<AdminLiveTraffic />} />
           <Route path="/admin/digital-twin" element={<AdminDigitalTwin />} />
+          <Route path="/admin/yolo-vision" element={<AdminYoloVision />} />
           <Route path="/admin/predictions" element={<AdminPredictions />} />
           <Route path="/admin/signal-optimization" element={<AdminSignalOptimization />} />
           <Route path="/admin/what-if" element={<AdminWhatIfScenarios />} />

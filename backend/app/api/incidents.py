@@ -69,7 +69,6 @@ def create_incident(
         longitude=body.longitude,
         reported_at=datetime.now(timezone.utc),
         status="active",
-        reported_by=user.id,
     )
     db.add(incident)
     db.commit()

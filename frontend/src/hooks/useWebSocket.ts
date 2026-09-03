@@ -71,7 +71,10 @@ export function useWebSocket() {
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('bharat_traffic_token');
     if (import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL) {
-      const base = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL;
+      const base = (
+        import.meta.env.VITE_WEBSOCKET_URL ||
+        import.meta.env.VITE_API_WS_URL
+      ).replace(/\/ws\/?$/, ''); // strip trailing /ws to avoid /ws/ws/ duplication
       return `${base}/ws/traffic?token=${token || ''}`;
     }
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -95,7 +98,7 @@ export function useWebSocket() {
           congestion: {},
           queue: {},
           signals: [],
-          incidents: d.top_congested_roads?.map((r: any) => ({
+          incidents: Array.isArray(d?.top_congested_roads) ? d.top_congested_roads.map((r: any) => ({
             id: r.id,
             incident_type: 'unknown',
             severity: 'low',
@@ -105,7 +108,7 @@ export function useWebSocket() {
             longitude: 0,
             road_id: r.id,
             intersection_id: 0,
-          })) || [],
+          })) : [],
           simulation: null,
           summary: {
             total_vehicles: d.total_vehicles_tracked || 0,
