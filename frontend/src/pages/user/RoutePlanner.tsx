@@ -41,8 +41,8 @@ export const UserRoutePlanner: React.FC = () => {
   const [showToSuggestions, setShowToSuggestions] = useState(false);
   const fromRef = useRef<HTMLDivElement>(null);
   const toRef = useRef<HTMLDivElement>(null);
-  const fromTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const toTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const fromTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const toTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // ── Generate routes from geocoded locations ────────────────────────
   const calculateRoutes = useCallback(
