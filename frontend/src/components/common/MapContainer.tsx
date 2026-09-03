@@ -29,6 +29,8 @@ interface MapProps {
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
+  /** Hide admin-specific overlays (junctions, vehicles, cameras, sensors, transit) for user-only maps */
+  hideAdminOverlays?: boolean;
   /** Synthetic data objects from SyntheticTrafficProvider */
   cameras?: SyntheticCamera[];
   sensors?: SyntheticSensor[];
@@ -73,6 +75,7 @@ export const MapContainer: React.FC<MapProps> = ({
   center,
   zoom = 12,
   interactive = true,
+  hideAdminOverlays = false,
   cameras = [],
   sensors = [],
   busStops = [],
@@ -236,8 +239,8 @@ export const MapContainer: React.FC<MapProps> = ({
   const updateMapData = (map: maplibregl.Map) => {
     if (!map || !isMapLoadedRef.current) return;
 
-    // 1. Traffic Flow Lines (GeoJSON Source Update)
-    const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
+    // 1. Traffic Flow Lines (GeoJSON Source Update) — skipped in user route-planner mode
+    const targetGeoJSON = hideAdminOverlays ? undefined : (roadGeoJSON || cityConfig.roadsGeoJSON);
     if (map.getSource('road-segments-src')) {
       (map.getSource('road-segments-src') as maplibregl.GeoJSONSource).setData(targetGeoJSON as any);
       map.setLayoutProperty('road-segments-line', 'visibility', 'visible');
@@ -450,7 +453,8 @@ export const MapContainer: React.FC<MapProps> = ({
     });
 
 
-    // 4. Render / Update Camera Markers (Synthetic)
+    // 4. Render / Update Camera Markers (Synthetic) — skipped for user route planner
+    if (!hideAdminOverlays) {
     cameras.forEach((cam) => {
       if (cameraMarkersRef.current.has(cam.id)) return;
       const el = document.createElement('div');
@@ -476,7 +480,9 @@ export const MapContainer: React.FC<MapProps> = ({
     });
 
 
-    // 5. Render / Update Sensor Markers (Synthetic)
+    } // end cameras
+    // 5. Render / Update Sensor Markers (Synthetic) — skipped for user route planner
+    if (!hideAdminOverlays) {
     sensors.forEach((sens) => {
       if (sensorMarkersRef.current.has(sens.id)) return;
       const el = document.createElement('div');
@@ -503,7 +509,9 @@ export const MapContainer: React.FC<MapProps> = ({
     });
 
 
-    // 6. Render / Update Bus Stop Markers (Synthetic Transit)
+    } // end sensors
+    // 6. Render / Update Bus Stop Markers (Synthetic Transit) — skipped for user route planner
+    if (!hideAdminOverlays) {
     busStops.forEach((b) => {
       if (busStopMarkersRef.current.has(b.id)) return;
       const el = document.createElement('div');
@@ -527,7 +535,9 @@ export const MapContainer: React.FC<MapProps> = ({
     });
 
 
-    // 7. Render / Update Metro Station Markers (Synthetic Transit)
+    } // end bus stops
+    // 7. Render / Update Metro Station Markers (Synthetic Transit) — skipped for user route planner
+    if (!hideAdminOverlays) {
     metroStations.forEach((m) => {
       if (metroMarkersRef.current.has(m.id)) return;
       const el = document.createElement('div');
@@ -551,7 +561,9 @@ export const MapContainer: React.FC<MapProps> = ({
     });
 
 
-    // 8. Render / Update Junction Markers PERSISTENTLY (No remove/recreate!)
+    } // end metro stations
+    // 8. Render / Update Junction Markers PERSISTENTLY (No remove/recreate!) — skipped for user route planner
+    if (!hideAdminOverlays) {
     const activeJunctions = (junctions && junctions.length > 0) ? junctions : cityConfig.junctions;
     activeJunctions.forEach((j: any) => {
       const statusColor =
@@ -601,7 +613,9 @@ export const MapContainer: React.FC<MapProps> = ({
       }
     });
 
-    // 9. Render / Update Ambulances & Emergency Priority Vehicles
+    } // end junctions
+    // 9. Render / Update Ambulances & Emergency Priority Vehicles — skipped for user route planner
+    if (!hideAdminOverlays) {
     (cityConfig.vehicles || [])
       .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
       .forEach((v) => {
@@ -647,7 +661,9 @@ export const MapContainer: React.FC<MapProps> = ({
         }
       });
 
-    // 10. Render / Update Buses, Heavy Freight & Clusters
+    } // end emergency vehicles
+    // 10. Render / Update Buses, Heavy Freight & Clusters — skipped for user route planner
+    if (!hideAdminOverlays) {
     (cityConfig.vehicles || [])
       .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
       .forEach((v) => {
@@ -691,6 +707,7 @@ export const MapContainer: React.FC<MapProps> = ({
           vehicleMarkersRef.current.set(v.id, { marker, el, popup });
         }
       });
+    } // end buses/freight/clusters
   };
 
   // 2. Reactively update map data whenever props or layer toggles change (WITHOUT destroying map canvas!)
@@ -699,6 +716,23 @@ export const MapContainer: React.FC<MapProps> = ({
       updateMapData(mapRef.current);
     }
   }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, selectedRouteId, cameras, sensors, busStops, metroStations]);
+
+  // 3. Auto-fit map bounds to selected route (user route planner mode)
+  useEffect(() => {
+    if (!mapRef.current || !isMapLoadedRef.current || !hideAdminOverlays) return;
+    if (!routes || routes.length === 0) return;
+
+    const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes[0];
+    if (!routeToFit || !routeToFit.coordinates || routeToFit.coordinates.length < 2) return;
+
+    const coords = routeToFit.coordinates;
+    const bounds = coords.reduce(
+      (b, coord) => b.extend(coord as maplibregl.LngLatLike),
+      new maplibregl.LngLatBounds(coords[0] as maplibregl.LngLatLike, coords[0] as maplibregl.LngLatLike),
+    );
+
+    mapRef.current.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 }, maxZoom: 14, duration: 800 });
+  }, [routes, selectedRouteId, hideAdminOverlays]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">

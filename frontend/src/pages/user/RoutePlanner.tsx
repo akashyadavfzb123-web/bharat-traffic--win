@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import type { RouteOption } from '../../types/traffic';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Card } from '../../components/Card';
@@ -7,7 +7,7 @@ import { Button } from '../../components/Button';
 import { useApp } from '../../context/AppContext';
 import { CITIES } from '../../data/cityData';
 import { generateRoutes, routeScore } from '../../utils/routeGenerator';
-import { mapSearchService } from '../../services/mapApi';
+import { mapSearchService, type SearchResult } from '../../services/mapApi';
 import {
   Navigation,
   MapPin,
@@ -17,6 +17,8 @@ import {
   Bus,
   Zap,
   CheckCircle2,
+  Search,
+  X,
 } from 'lucide-react';
 
 export const UserRoutePlanner: React.FC = () => {
@@ -31,6 +33,16 @@ export const UserRoutePlanner: React.FC = () => {
   const [calculating, setCalculating] = useState(false);
   const [geocodingError, setGeocodingError] = useState<string | null>(null);
   const [routingSource, setRoutingSource] = useState<'osrm' | 'mock' | null>(null);
+
+  // Autocomplete state for From/To search fields
+  const [fromSuggestions, setFromSuggestions] = useState<SearchResult[]>([]);
+  const [toSuggestions, setToSuggestions] = useState<SearchResult[]>([]);
+  const [showFromSuggestions, setShowFromSuggestions] = useState(false);
+  const [showToSuggestions, setShowToSuggestions] = useState(false);
+  const fromRef = useRef<HTMLDivElement>(null);
+  const toRef = useRef<HTMLDivElement>(null);
+  const fromTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const toTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   // ── Generate routes from geocoded locations ────────────────────────
   const calculateRoutes = useCallback(
@@ -127,6 +139,46 @@ export const UserRoutePlanner: React.FC = () => {
     calculateRoutes(cityConfig.defaultOrigin, cityConfig.defaultDestination);
   }, [selectedCity, cityConfig, calculateRoutes]);
 
+  // ── Autocomplete search for From field ────────────────────────────
+  useEffect(() => {
+    if (!fromLocation || fromLocation.trim().length < 2) {
+      setFromSuggestions([]);
+      return;
+    }
+    if (fromTimerRef.current) clearTimeout(fromTimerRef.current);
+    fromTimerRef.current = setTimeout(async () => {
+      const results = await mapSearchService.searchLocations(fromLocation, selectedCity);
+      setFromSuggestions(results);
+      setShowFromSuggestions(results.length > 0);
+    }, 350);
+    return () => { if (fromTimerRef.current) clearTimeout(fromTimerRef.current); };
+  }, [fromLocation, selectedCity]);
+
+  // ── Autocomplete search for To field ────────────────────────────
+  useEffect(() => {
+    if (!toLocation || toLocation.trim().length < 2) {
+      setToSuggestions([]);
+      return;
+    }
+    if (toTimerRef.current) clearTimeout(toTimerRef.current);
+    toTimerRef.current = setTimeout(async () => {
+      const results = await mapSearchService.searchLocations(toLocation, selectedCity);
+      setToSuggestions(results);
+      setShowToSuggestions(results.length > 0);
+    }, 350);
+    return () => { if (toTimerRef.current) clearTimeout(toTimerRef.current); };
+  }, [toLocation, selectedCity]);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (fromRef.current && !fromRef.current.contains(e.target as Node)) setShowFromSuggestions(false);
+      if (toRef.current && !toRef.current.contains(e.target as Node)) setShowToSuggestions(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
   // ── Handle form submit ─────────────────────────────────────────────
   const handleCalculate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,34 +225,80 @@ export const UserRoutePlanner: React.FC = () => {
             }
           >
             <form onSubmit={handleCalculate} className="space-y-3.5">
-              <div>
+              <div ref={fromRef} className="relative">
                 <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
                   <MapPin className="w-3.5 h-3.5 text-emerald-400" />
                   From (Starting Location)
                 </label>
-                <input
-                  type="text"
-                  value={fromLocation}
-                  onChange={(e) => setFromLocation(e.target.value)}
-                  placeholder="e.g. Koramangala 5th Block, Bengaluru"
-                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
-                  required
-                />
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={fromLocation}
+                    onChange={(e) => setFromLocation(e.target.value)}
+                    onFocus={() => fromSuggestions.length > 0 && setShowFromSuggestions(true)}
+                    placeholder="e.g. Koramangala 5th Block, Bengaluru"
+                    className="w-full pl-9 pr-8 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
+                    required
+                  />
+                  {fromLocation && (
+                    <button type="button" onClick={() => { setFromLocation(''); setFromSuggestions([]); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                {showFromSuggestions && fromSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-30 max-h-40 overflow-y-auto font-mono text-xs">
+                    {fromSuggestions.map((res) => (
+                      <div
+                        key={res.place_id}
+                        onClick={() => { setFromLocation(res.display_name); setFromSuggestions([]); setShowFromSuggestions(false); }}
+                        className="p-2.5 hover:bg-cyan-500/20 cursor-pointer border-b border-slate-800/60 text-slate-200 flex items-start gap-2 text-[11px] last:border-b-0"
+                      >
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{res.display_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              <div>
+              <div ref={toRef} className="relative">
                 <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
                   <MapPin className="w-3.5 h-3.5 text-cyan-400" />
                   To (Destination Location)
                 </label>
-                <input
-                  type="text"
-                  value={toLocation}
-                  onChange={(e) => setToLocation(e.target.value)}
-                  placeholder="e.g. Whitefield ITPL, Bengaluru"
-                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
-                  required
-                />
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={toLocation}
+                    onChange={(e) => setToLocation(e.target.value)}
+                    onFocus={() => toSuggestions.length > 0 && setShowToSuggestions(true)}
+                    placeholder="e.g. Whitefield ITPL, Bengaluru"
+                    className="w-full pl-9 pr-8 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
+                    required
+                  />
+                  {toLocation && (
+                    <button type="button" onClick={() => { setToLocation(''); setToSuggestions([]); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                {showToSuggestions && toSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-30 max-h-40 overflow-y-auto font-mono text-xs">
+                    {toSuggestions.map((res) => (
+                      <div
+                        key={res.place_id}
+                        onClick={() => { setToLocation(res.display_name); setToSuggestions([]); setShowToSuggestions(false); }}
+                        className="p-2.5 hover:bg-cyan-500/20 cursor-pointer border-b border-slate-800/60 text-slate-200 flex items-start gap-2 text-[11px] last:border-b-0"
+                      >
+                        <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{res.display_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Geocoding Error */}
@@ -444,11 +542,12 @@ export const UserRoutePlanner: React.FC = () => {
             </div>
           )}
 
-          {/* MapLibre Container */}
+          {/* MapLibre Container — isolated from admin overlays */}
           <div className="flex-1 min-h-[440px]">
             <MapContainer
               routes={routes}
               selectedRouteId={selectedRoute?.id ?? null}
+              hideAdminOverlays
             />
           </div>
         </div>
