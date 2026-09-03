@@ -22,6 +22,7 @@ interface MapProps {
   incidents?: Incident[];
   digitalTwinNodes?: DigitalTwinNode[];
   routes?: RouteOption[];
+  selectedRouteId?: string | null;
   roadGeoJSON?: RoadGeoJSONCollection;
   selectedRoadId?: string | null;
   selectedJunctionId?: string | null;
@@ -62,6 +63,7 @@ export const MapContainer: React.FC<MapProps> = ({
   incidents = [],
   digitalTwinNodes = [],
   routes = [],
+  selectedRouteId = null,
   roadGeoJSON,
   onRoadClick,
   onJunctionClick,
@@ -265,17 +267,54 @@ export const MapContainer: React.FC<MapProps> = ({
               'line-cap': 'round',
             },
             paint: {
-              'line-color': route.isRecommended
-                ? '#06b6d4'
-                : route.congestionLevel === 'severe'
-                ? '#ef4444'
-                : '#f59e0b',
-              'line-width': route.isRecommended ? 6 : 4,
-              'line-opacity': 0.85,
+              'line-color':
+                selectedRouteId && route.id === selectedRouteId
+                  ? '#06b6d4'
+                  : route.isRecommended
+                  ? '#06b6d4'
+                  : route.congestionLevel === 'severe'
+                  ? '#ef4444'
+                  : '#f59e0b',
+              'line-width':
+                selectedRouteId && route.id === selectedRouteId
+                  ? 7
+                  : route.isRecommended
+                  ? 5
+                  : 3,
+              'line-opacity':
+                selectedRouteId
+                  ? route.id === selectedRouteId
+                    ? 1.0
+                    : 0.35
+                  : 0.85,
             },
           });
         }
       });
+
+      // 2b. Render origin/destination markers when routes are present
+      if (routes.length > 0) {
+        const firstRoute = routes[0];
+        if (firstRoute.coordinates.length >= 2) {
+          // Origin marker
+          const originEl = document.createElement('div');
+          originEl.className = 'w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
+          originEl.innerHTML = '<span class="text-[9px] font-bold text-white">A</span>';
+          new maplibregl.Marker({ element: originEl })
+            .setLngLat(firstRoute.coordinates[0])
+            .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#10b981;'>Origin:</b> ${firstRoute.origin}`))
+            .addTo(map);
+
+          // Destination marker
+          const destEl = document.createElement('div');
+          destEl.className = 'w-5 h-5 rounded-full bg-red-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
+          destEl.innerHTML = '<span class="text-[9px] font-bold text-white">B</span>';
+          new maplibregl.Marker({ element: destEl })
+            .setLngLat(firstRoute.coordinates[firstRoute.coordinates.length - 1])
+            .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#ef4444;'>Destination:</b> ${firstRoute.destination}`))
+            .addTo(map);
+        }
+      }
 
       // 3. Render Ambulances & Emergency Priority Vehicles
       if (showEmergencyVehicles) {
@@ -417,7 +456,7 @@ export const MapContainer: React.FC<MapProps> = ({
     return () => {
       map.remove();
     };
-  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, currentStyle, showTrafficLayer, showEmergencyVehicles, showTransitVehicles, selectedCity, onJunctionClick, onRoadClick]);
+  }, [junctions, incidents, digitalTwinNodes, routes, selectedRouteId, roadGeoJSON, currentStyle, showTrafficLayer, showEmergencyVehicles, showTransitVehicles, selectedCity, onJunctionClick, onRoadClick]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
