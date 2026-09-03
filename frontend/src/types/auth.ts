@@ -18,6 +18,10 @@ export interface RegisterData {
   email: string;
   password: string;
   confirmPassword: string;
+  role: UserRole;
+  phone?: string;
+  department?: string;
+  organization?: string;
 }
 
 export interface TokenResponse {

@@ -32,7 +32,16 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    user = auth_service.register_user(db, email=body.email, name=body.name, password=body.password)
+    user = auth_service.register_user(
+        db,
+        email=body.email,
+        name=body.name,
+        password=body.password,
+        role=body.role,
+        phone=body.phone,
+        department=body.department,
+        organization=body.organization,
+    )
     return user
 
 

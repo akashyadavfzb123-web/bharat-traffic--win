@@ -17,8 +17,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function mapRole(backendRole: string): UserRole {
+const ADMIN_EMAIL_DOMAIN = '@bharat.traffic.twin';
+
+function mapRole(backendRole: string, email?: string): UserRole {
   if (backendRole === 'ADMIN' || backendRole === 'admin') return 'admin';
+  // Ultimate fallback: if email is official domain, treat as admin regardless of backend
+  if (email && email.toLowerCase().endsWith(ADMIN_EMAIL_DOMAIN)) return 'admin';
   return 'user';
 }
 
@@ -28,7 +32,7 @@ function toAuthUser(data: any): AuthUser {
     id: data.id,
     name: data.full_name || data.name || data.email,
     email: data.email,
-    role: mapRole(data.role),
+    role: mapRole(data.role, data.email),
   };
 }
 
@@ -101,16 +105,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Store JWT token
       localStorage.setItem('bharat_traffic_token', tokenResponse.access_token);
 
-      // Some backends include user in the response; others don't
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let userData: any = (tokenResponse as any).user;
-      if (!userData) {
-        // Fetch user profile after login
-        const meResponse = await authApi.getMe();
-        userData = meResponse;
-      }
+      // Fetch user profile from /me
+      const meResponse = await authApi.getMe();
+      const authUser = toAuthUser(meResponse);
 
-      const authUser = toAuthUser(userData);
       setUser(authUser);
       setRoleState(authUser.role);
       setIsLoading(false);
@@ -137,11 +135,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
 
     try {
-      // Register creates the user (always USER role from backend)
+      // Register with role and additional info
       await authApi.register({
         name: data.name,
         email: data.email,
         password: data.password,
+        role: data.role,
+        phone: data.phone,
+        department: data.department,
+        organization: data.organization,
       });
 
       // Auto-login after registration
@@ -152,14 +154,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       localStorage.setItem('bharat_traffic_token', tokenResponse.access_token);
 
-      // Fetch user profile (backend login may not include user object)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let userData: any = (tokenResponse as any).user;
-      if (!userData) {
-        const meResponse = await authApi.getMe();
-        userData = meResponse;
-      }
-      const authUser = toAuthUser(userData);
+      // Fetch user profile from /me
+      const meResponse = await authApi.getMe();
+      const authUser = toAuthUser(meResponse);
+
       setUser(authUser);
       setRoleState(authUser.role);
       setIsLoading(false);

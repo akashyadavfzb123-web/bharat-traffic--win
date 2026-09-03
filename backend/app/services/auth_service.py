@@ -14,20 +14,39 @@ def get_user_by_id(db: Session, user_id: int) -> User | None:
     return db.get(User, user_id)
 
 
-def register_user(db: Session, *, email: str, name: str, password: str) -> User:
-    """Create a new USER-account.
+ADMIN_EMAIL_DOMAIN = "bharat.traffic.twin"
 
-    Deliberately accepts no role argument: public registration can never
-    create an ADMIN. Admins are promoted out-of-band (e.g. direct DB update).
+
+def register_user(
+    db: Session,
+    *,
+    email: str,
+    name: str,
+    password: str,
+    role: str | None = None,
+    phone: str | None = None,
+    department: str | None = None,
+    organization: str | None = None,
+) -> User:
+    """Create a new account.
+
+    If *role* is ``"admin"`` the email must belong to the official
+    ``@bharat.traffic.twin`` domain, otherwise the account is always created
+    as USER.
     """
     if get_user_by_email(db, email) is not None:
         raise AppError(status_code=409, detail="Email already registered")
+
+    # Determine role: only @bharat.traffic.twin emails may be admin
+    user_role = UserRole.USER
+    if role and role.lower() == "admin" and email.lower().endswith(f"@{ADMIN_EMAIL_DOMAIN}"):
+        user_role = UserRole.ADMIN
 
     user = User(
         email=email,
         name=name,
         password_hash=hash_password(password),
-        role=UserRole.USER,
+        role=user_role,
     )
     db.add(user)
     db.commit()

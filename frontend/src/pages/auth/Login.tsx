@@ -12,7 +12,8 @@ import {
   Mail,
   AlertCircle,
   ArrowRight,
-  Zap,
+  Shield,
+  User,
 } from 'lucide-react';
 
 export const Login: React.FC = () => {
@@ -24,6 +25,9 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState('');
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+
+  // Detect role from email domain
+  const detectedRole = email.endsWith('@bharat.traffic.twin') ? 'admin' : 'user';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,11 +88,21 @@ export const Login: React.FC = () => {
 
       {/* Card Form */}
       <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 relative z-10 backdrop-blur-md space-y-5">
-        {/* Portal Mode Badge */}
+        {/* Portal Mode Badge — role detected from email domain */}
         <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 text-xs">
-          <span className="text-slate-400">Your role is determined by your account.</span>
-          <Badge color="cyan" dot>
-            Login Required
+          <span className="text-slate-400">
+            {email ? (
+              <>Role detected from <strong className="text-slate-300">{email.split('@')[1]}</strong></>
+            ) : (
+              'Enter your email to detect role.'
+            )}
+          </span>
+          <Badge color={detectedRole === 'admin' ? 'amber' : 'cyan'} dot>
+            {detectedRole === 'admin' ? (
+              <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> Admin Access</span>
+            ) : (
+              <span className="flex items-center gap-1"><User className="w-3 h-3" /> Citizen Access</span>
+            )}
           </Badge>
         </div>
 
@@ -162,39 +176,7 @@ export const Login: React.FC = () => {
           </Button>
         </form>
 
-        {/* Quick Demo Access */}
-        <div className="pt-2 space-y-3">
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-700/50" />
-            </div>
-            <div className="relative flex justify-center text-[10px]">
-              <span className="px-2 bg-slate-900 text-slate-500 font-mono">QUICK ACCESS</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              setEmail('user@demo.com');
-              setPassword('password');
-              try {
-                const loggedUser = await login({ email: 'user@demo.com', password: 'password' });
-                if (loggedUser.role === 'admin') {
-                  navigate('/admin/dashboard');
-                } else {
-                  navigate('/user/dashboard');
-                }
-              } catch {
-                // Error handled by AuthContext
-              }
-            }}
-            disabled={isLoading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600/20 to-cyan-600/20 border border-emerald-500/30 rounded-xl text-xs font-mono text-emerald-300 hover:from-emerald-600/30 hover:to-cyan-600/30 hover:border-emerald-400/50 transition-all disabled:opacity-50"
-          >
-            <Zap className="w-3.5 h-3.5" />
-            Demo Admin Login
-          </button>
-        </div>
+
 
         {/* Register Redirect Link */}
         <div className="text-center pt-2 text-xs text-slate-400">

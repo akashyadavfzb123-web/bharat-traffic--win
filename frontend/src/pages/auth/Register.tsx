@@ -14,6 +14,11 @@ import {
   ArrowRight,
   CheckSquare,
   Square,
+  Shield,
+  User,
+  Phone,
+  Building2,
+  Briefcase,
 } from 'lucide-react';
 
 export const Register: React.FC = () => {
@@ -27,6 +32,13 @@ export const Register: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [validationError, setValidationError] = useState('');
+  const [accountType, setAccountType] = useState<'user' | 'admin'>('user');
+  const [phone, setPhone] = useState('');
+  const [department, setDepartment] = useState('');
+  const [organization, setOrganization] = useState('');
+
+  const isAdminEmail = email.endsWith('@bharat.traffic.twin');
+  const emailDomain = email.includes('@') ? email.split('@')[1] : '';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,6 +61,10 @@ export const Register: React.FC = () => {
       setValidationError('Passwords do not match');
       return;
     }
+    if (accountType === 'admin' && !isAdminEmail) {
+      setValidationError('Admin accounts require a @bharat.traffic.twin email address');
+      return;
+    }
     if (!agreeTerms) {
       setValidationError('You must agree to the Terms of Service');
       return;
@@ -60,14 +76,15 @@ export const Register: React.FC = () => {
         email,
         password,
         confirmPassword,
+        role: accountType,
+        phone: phone || undefined,
+        department: accountType === 'admin' ? department : undefined,
+        organization: accountType === 'admin' ? organization : undefined,
       });
 
-      // Navigate based on role from the backend (always 'user' for registration)
-      if (createdUser.role === 'admin') {
-        navigate('/admin/dashboard');
-      } else {
-        navigate('/user/dashboard');
-      }
+      // Navigate based on role from the backend
+      const isAdmin = createdUser.role === 'admin';
+      navigate(isAdmin ? '/admin/dashboard' : '/user/dashboard');
     } catch {
       // Error handled by AuthContext
     }
@@ -101,12 +118,50 @@ export const Register: React.FC = () => {
 
       {/* Card Form */}
       <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 relative z-10 backdrop-blur-md space-y-5">
-        {/* Role Badge Notice */}
-        <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 text-xs">
-          <span className="text-slate-400">Account Type:</span>
-          <Badge color="cyan" dot>
-            Citizen Mobility Account
-          </Badge>
+        {/* Account Type Toggle */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 text-xs">
+            <span className="text-slate-400">Account Type:</span>
+            <Badge color={accountType === 'admin' ? 'amber' : 'cyan'} dot>
+              {accountType === 'admin' ? (
+                <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> Admin Operator</span>
+              ) : (
+                <span className="flex items-center gap-1"><User className="w-3 h-3" /> Citizen Mobility</span>
+              )}
+            </Badge>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setAccountType('user')}
+              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-mono font-bold transition-all ${
+                accountType === 'user'
+                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-sm shadow-cyan-500/10'
+                  : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+              }`}
+            >
+              <User className="w-3.5 h-3.5" />
+              Citizen
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccountType('admin')}
+              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-mono font-bold transition-all ${
+                accountType === 'admin'
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-sm shadow-amber-500/10'
+                  : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+              }`}
+            >
+              <Shield className="w-3.5 h-3.5" />
+              Admin
+            </button>
+          </div>
+          {accountType === 'admin' && !isAdminEmail && emailDomain && (
+            <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 font-mono flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              Admin registration requires <strong>@bharat.traffic.twin</strong> email. Your domain is <strong>@{emailDomain}</strong>.
+            </div>
+          )}
         </div>
 
         {/* Error State Banner */}
@@ -189,6 +244,72 @@ export const Register: React.FC = () => {
               />
             </div>
           </div>
+
+          {/* Additional Info for Admin */}
+          {accountType === 'admin' && (
+            <div className="space-y-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+              <div className="text-[11px] text-amber-400 font-mono font-bold uppercase flex items-center gap-1.5">
+                <Shield className="w-3 h-3" />
+                Admin Registration Details
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
+                  <Phone className="w-3.5 h-3.5 text-amber-400" />
+                  Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="e.g. +91 98765 43210"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
+                  <Briefcase className="w-3.5 h-3.5 text-amber-400" />
+                  Department
+                </label>
+                <input
+                  type="text"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  placeholder="e.g. Traffic Operations, Emergency Response"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
+                  <Building2 className="w-3.5 h-3.5 text-amber-400" />
+                  Organization
+                </label>
+                <input
+                  type="text"
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  placeholder="e.g. Delhi Traffic Police, NHAI"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Phone for Citizen (optional) */}
+          {accountType === 'user' && (
+            <div>
+              <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5 font-mono">
+                <Phone className="w-3.5 h-3.5 text-cyan-400" />
+                Phone Number <span className="text-slate-600">(optional)</span>
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="e.g. +91 98765 43210"
+                className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
+              />
+            </div>
+          )}
 
           {/* Terms checkbox */}
           <div className="flex items-center gap-2 pt-1 cursor-pointer" onClick={() => setAgreeTerms(!agreeTerms)}>
