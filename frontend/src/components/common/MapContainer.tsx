@@ -13,6 +13,8 @@ import {
   X,
   Zap,
   Globe,
+  Siren,
+  Bus,
 } from 'lucide-react';
 
 interface MapProps {
@@ -73,6 +75,8 @@ export const MapContainer: React.FC<MapProps> = ({
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+  const [showEmergencyVehicles, setShowEmergencyVehicles] = useState(true);
+  const [showTransitVehicles, setShowTransitVehicles] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
@@ -118,7 +122,6 @@ export const MapContainer: React.FC<MapProps> = ({
         speed: 1.5,
       });
 
-      // Add temporary search pin marker
       new maplibregl.Marker({ color: '#06b6d4' })
         .setLngLat([lng, lat])
         .setPopup(new maplibregl.Popup().setHTML(`<b style="color: #0284c7;">${res.display_name}</b>`))
@@ -164,7 +167,7 @@ export const MapContainer: React.FC<MapProps> = ({
     mapRef.current = map;
 
     map.on('load', () => {
-      // 1. Render City Road GeoJSON polylines (Live Traffic Congestion Layer)
+      // 1. Render City Road GeoJSON polylines (Traffic Flow Lines: Green, Yellow, Red)
       const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
       if (targetGeoJSON && showTrafficLayer) {
         map.addSource('road-segments-src', {
@@ -172,6 +175,31 @@ export const MapContainer: React.FC<MapProps> = ({
           data: targetGeoJSON as unknown as string,
         });
 
+        // Outer casing glow layer for heavy congestion (Red)
+        map.addLayer({
+          id: 'road-segments-glow',
+          type: 'line',
+          source: 'road-segments-src',
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round',
+          },
+          paint: {
+            'line-color': [
+              'step',
+              ['get', 'congestion'],
+              'rgba(34, 197, 94, 0.2)', // Green glow
+              40,
+              'rgba(234, 179, 8, 0.3)',  // Yellow glow
+              70,
+              'rgba(239, 68, 68, 0.6)',  // Red pulsating glow
+            ],
+            'line-width': 12,
+            'line-blur': 3,
+          },
+        });
+
+        // Main Traffic Flow Line
         map.addLayer({
           id: 'road-segments-line',
           type: 'line',
@@ -184,14 +212,14 @@ export const MapContainer: React.FC<MapProps> = ({
             'line-color': [
               'step',
               ['get', 'congestion'],
-              '#22c55e', // Green <40%
+              '#22c55e', // Green (>40 km/h Clear)
               40,
-              '#eab308', // Yellow 40-70%
+              '#eab308', // Yellow (20-40 km/h Slow)
               70,
-              '#ef4444', // Red >70%
+              '#ef4444', // Red (<20 km/h Gridlock)
             ],
             'line-width': 7,
-            'line-opacity': 0.85,
+            'line-opacity': 0.9,
           },
         });
 
@@ -249,7 +277,86 @@ export const MapContainer: React.FC<MapProps> = ({
         }
       });
 
-      // 3. Render City Junction Markers
+      // 3. Render Ambulances & Emergency Priority Vehicles
+      if (showEmergencyVehicles) {
+        (cityConfig.vehicles || [])
+          .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
+          .forEach((v) => {
+            const el = document.createElement('div');
+            el.className =
+              'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
+            el.style.boxShadow = '0 0 16px #ef4444';
+
+            el.innerHTML = `
+              <span class="text-sm">🚑</span>
+              <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
+            `;
+
+            const popupContent = `
+              <div style="font-family: monospace; padding: 4px; min-width: 200px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
+                  <span style="font-size: 11px; font-weight: bold; color: #ef4444; text-transform: uppercase;">🚑 Emergency Ambulance</span>
+                  <span style="font-size: 9px; background: rgba(239,68,68,0.2); color: #f87171; padding: 2px 4px; border-radius: 4px;">PRIORITY</span>
+                </div>
+                <h4 style="margin: 0; font-size: 12px; font-weight: bold; color: #f8fafc;">${v.name}</h4>
+                <div style="margin-top: 6px; font-size: 10px; color: #94a3b8; line-height: 1.4;">
+                  <div>Speed: <strong style="color: #38bdf8;">${v.speedKmh} km/h</strong></div>
+                  <div>Destination: <strong style="color: #f8fafc;">${v.destination}</strong></div>
+                  <div>ETA: <strong style="color: #4ade80;">${v.etaMin || 8} mins</strong></div>
+                  <div style="margin-top: 4px; color: #a7f3d0; background: rgba(16,185,129,0.15); padding: 3px; border-radius: 4px; font-weight: bold;">
+                    ${v.detail || 'Green Corridor Active'}
+                  </div>
+                </div>
+              </div>
+            `;
+
+            new maplibregl.Marker(el)
+              .setLngLat([v.lng, v.lat])
+              .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+              .addTo(map);
+          });
+      }
+
+      // 4. Render Buses, Heavy Vehicles & Traffic Clusters
+      if (showTransitVehicles) {
+        (cityConfig.vehicles || [])
+          .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
+          .forEach((v) => {
+            const el = document.createElement('div');
+
+            if (v.type === 'city_bus') {
+              el.className =
+                'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+              el.innerHTML = '🚌';
+            } else if (v.type === 'heavy_freight') {
+              el.className =
+                'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+              el.innerHTML = '🚛';
+            } else {
+              el.className =
+                'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
+              el.innerHTML = '🚘';
+            }
+
+            const popupContent = `
+              <div style="font-family: monospace; padding: 4px; min-width: 180px;">
+                <h4 style="margin: 0; font-size: 11px; font-weight: bold; color: #38bdf8;">${v.name}</h4>
+                <div style="margin-top: 4px; font-size: 10px; color: #94a3b8;">
+                  <div>Speed: <strong>${v.speedKmh} km/h</strong></div>
+                  <div>Corridor: <strong>${v.destination}</strong></div>
+                  <div style="color: #cbd5e1; margin-top: 2px;">${v.detail}</div>
+                </div>
+              </div>
+            `;
+
+            new maplibregl.Marker(el)
+              .setLngLat([v.lng, v.lat])
+              .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+              .addTo(map);
+          });
+      }
+
+      // 5. Render City Junction Markers
       const activeJunctions = junctions.length > 0 ? junctions : cityConfig.junctions;
       activeJunctions.forEach((j: any) => {
         const el = document.createElement('div');
@@ -293,7 +400,7 @@ export const MapContainer: React.FC<MapProps> = ({
           .addTo(map);
       });
 
-      // 4. Render Incidents
+      // 6. Render Incidents
       incidents.forEach((inc) => {
         const el = document.createElement('div');
         el.className =
@@ -310,11 +417,11 @@ export const MapContainer: React.FC<MapProps> = ({
     return () => {
       map.remove();
     };
-  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, currentStyle, showTrafficLayer, selectedCity, onJunctionClick, onRoadClick]);
+  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, currentStyle, showTrafficLayer, showEmergencyVehicles, showTransitVehicles, selectedCity, onJunctionClick, onRoadClick]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
-      {/* Top Map Header Control Bar: 4-City Tabs + Search + Style Menu */}
+      {/* Top Map Header Control Bar: 4-City Tabs + Search + Toggles + Style Menu */}
       <div className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0">
         {/* 1. 4-City Selector Tabs */}
         <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
@@ -375,19 +482,47 @@ export const MapContainer: React.FC<MapProps> = ({
           )}
         </div>
 
-        {/* 3. Map Controls: Traffic Toggle & Style Switcher */}
-        <div className="flex items-center gap-2">
-          {/* Live Traffic Toggle */}
+        {/* 3. Map Controls: Emergency Toggle + Transit Toggle + Traffic Layer + Map Style */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Emergency Ambulances Toggle */}
+          <button
+            onClick={() => setShowEmergencyVehicles(!showEmergencyVehicles)}
+            title="Toggle Ambulances & Green Corridor Vehicles"
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
+              showEmergencyVehicles
+                ? 'bg-red-500/20 text-red-300 border-red-500/40 shadow-sm'
+                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
+            }`}
+          >
+            <Siren className={`w-3 h-3 ${showEmergencyVehicles ? 'text-red-400 animate-pulse' : ''}`} />
+            <span>Ambulance</span>
+          </button>
+
+          {/* Public Transit Buses Toggle */}
+          <button
+            onClick={() => setShowTransitVehicles(!showTransitVehicles)}
+            title="Toggle City Buses & Freight Vehicles"
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
+              showTransitVehicles
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-sm'
+                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
+            }`}
+          >
+            <Bus className="w-3 h-3 text-cyan-400" />
+            <span>Transit</span>
+          </button>
+
+          {/* Live Traffic Flow Layer Toggle */}
           <button
             onClick={() => setShowTrafficLayer(!showTrafficLayer)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
               showTrafficLayer
                 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
                 : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
             }`}
           >
             <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
-            <span className="hidden md:inline">Traffic Layer</span>
+            <span>Flow Lines</span>
           </button>
 
           {/* Map Style Selector Dropdown */}
@@ -430,23 +565,38 @@ export const MapContainer: React.FC<MapProps> = ({
       <div className="flex-1 relative">
         <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-        {/* Legend Overlay */}
-        <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1 z-10 shadow-lg font-mono">
+        {/* Legend Overlay: Traffic Flow Colors & Vehicle Markers */}
+        <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1.5 z-10 shadow-lg font-mono">
           <div className="font-bold text-slate-400 text-[10px] uppercase flex items-center justify-between gap-4">
-            <span>{selectedCity} Live Network</span>
+            <span>{selectedCity} Live Intelligence</span>
             <span className="text-cyan-400 text-[9px]">MapLibre Active</span>
           </div>
-          <div className="flex items-center gap-2 pt-1">
-            <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
-            <span>Clear Flow (&gt;40 km/h)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
-            <span>Slow Traffic (20-40 km/h)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-1 bg-red-500 inline-block rounded" />
-            <span>Heavy Gridlock (&lt;20 km/h)</span>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] pt-1">
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
+              <span>Green (&gt;40 km/h)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
+              <span>Yellow (20-40)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-1 bg-red-500 inline-block rounded shadow-[0_0_8px_#ef4444]" />
+              <span className="text-red-400 font-bold">Red Gridlock</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs">🚑</span>
+              <span className="text-red-300 font-bold">Ambulance</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs">🚌</span>
+              <span className="text-cyan-300">City Bus</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs">🚘</span>
+              <span className="text-amber-300">Cluster</span>
+            </div>
           </div>
         </div>
       </div>

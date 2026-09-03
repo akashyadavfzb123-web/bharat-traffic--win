@@ -19,6 +19,18 @@ export interface CityConfig {
     isRecommended: boolean;
     coordinates: [number, number][];
   }>;
+  vehicles: Array<{
+    id: string;
+    type: 'ambulance' | 'fire_brigade' | 'city_bus' | 'heavy_freight' | 'high_traffic_cluster';
+    name: string;
+    lat: number;
+    lng: number;
+    speedKmh: number;
+    status: 'emergency_priority' | 'active_transit' | 'heavy_congestion';
+    destination: string;
+    etaMin?: number;
+    detail?: string;
+  }>;
   junctions: Array<{
     id: string;
     name: string;
@@ -97,6 +109,65 @@ export const CITIES: Record<string, CityConfig> = {
           [77.6762, 12.9262],
           [77.7011, 12.9569],
         ],
+      },
+    ],
+    vehicles: [
+      {
+        id: 'amb-blr-1',
+        type: 'ambulance',
+        name: '108 Cardiac Response Ambulance (KA-01-GA-9112)',
+        lat: 12.9348,
+        lng: 77.605,
+        speedKmh: 64,
+        status: 'emergency_priority',
+        destination: 'Manipal Hospital, Old Airport Rd',
+        etaMin: 9,
+        detail: 'Green Corridor Signal Override Active',
+      },
+      {
+        id: 'amb-blr-2',
+        type: 'ambulance',
+        name: 'Trauma Care Emergency Unit (KA-05-EM-4081)',
+        lat: 12.9569,
+        lng: 77.7011,
+        speedKmh: 58,
+        status: 'emergency_priority',
+        destination: 'Vaidehi Super Speciality Hospital, Whitefield',
+        etaMin: 6,
+        detail: 'Patient Pre-Arrival Telemetry Active',
+      },
+      {
+        id: 'bus-blr-1',
+        type: 'city_bus',
+        name: 'BMTC Volvo Electric Express #500D',
+        lat: 12.9172,
+        lng: 77.6228,
+        speedKmh: 14,
+        status: 'active_transit',
+        destination: 'Kadubeesanahalli Bus Stop',
+        detail: 'Occupancy: 88% (Heavy Commuter Flow)',
+      },
+      {
+        id: 'truck-blr-1',
+        type: 'heavy_freight',
+        name: 'Container Freight Transporter (16-Wheeler)',
+        lat: 13.0359,
+        lng: 77.597,
+        speedKmh: 18,
+        status: 'heavy_congestion',
+        destination: 'Peenya Industrial Zone',
+        detail: 'Restricted Heavy Freight Lane',
+      },
+      {
+        id: 'cluster-blr-1',
+        type: 'high_traffic_cluster',
+        name: 'Silk Board Chokepoint High-Density Cluster',
+        lat: 12.9172,
+        lng: 77.6228,
+        speedKmh: 8,
+        status: 'heavy_congestion',
+        destination: 'Bellandur EcoSpace Corridor',
+        detail: '1,466 Vehicles Queued (94% Bottleneck)',
       },
     ],
     junctions: [
@@ -181,6 +252,53 @@ export const CITIES: Record<string, CityConfig> = {
         ],
       },
     ],
+    vehicles: [
+      {
+        id: 'amb-del-1',
+        type: 'ambulance',
+        name: 'AIIMS Advanced Life Support Ambulance (DL-01-AM-1002)',
+        lat: 28.5672,
+        lng: 77.2100,
+        speedKmh: 70,
+        status: 'emergency_priority',
+        destination: 'AIIMS Emergency Trauma Centre, Ring Rd',
+        etaMin: 5,
+        detail: 'Green Corridor Active - AIIMS Junction Priority',
+      },
+      {
+        id: 'bus-del-1',
+        type: 'city_bus',
+        name: 'DTC Low-Floor Electric Bus #429',
+        lat: 28.6315,
+        lng: 77.2167,
+        speedKmh: 22,
+        status: 'active_transit',
+        destination: 'ISBT Kashmiri Gate',
+        detail: 'Occupancy: 94% (Kashmiri Gate Route)',
+      },
+      {
+        id: 'truck-del-1',
+        type: 'heavy_freight',
+        name: 'Interstate Freight Logistics Trailer',
+        lat: 28.5684,
+        lng: 77.2796,
+        speedKmh: 15,
+        status: 'heavy_congestion',
+        destination: 'Noida Freight Depot',
+        detail: 'DND Toll Queue Delay (+15 mins)',
+      },
+      {
+        id: 'cluster-del-1',
+        type: 'high_traffic_cluster',
+        name: 'Gurgaon Toll Plaza Chokepoint Cluster',
+        lat: 28.4721,
+        lng: 77.0725,
+        speedKmh: 9,
+        status: 'heavy_congestion',
+        destination: 'Cyber City Expressway',
+        detail: '1,850 Vehicles Queued',
+      },
+    ],
     junctions: [
       { id: 'del-1', name: 'Connaught Place Outer Circle', lat: 28.6315, lng: 77.2167, status: 'yellow', waitTimeSec: 85, queueLengthVeh: 620, congestionPct: 65 },
       { id: 'del-2', name: 'DND Flyway Toll Plaza', lat: 28.5684, lng: 77.2796, status: 'critical', waitTimeSec: 210, queueLengthVeh: 1850, congestionPct: 92 },
@@ -254,6 +372,42 @@ export const CITIES: Record<string, CityConfig> = {
           [72.8500, 19.0900],
           [72.8464, 19.1197],
         ],
+      },
+    ],
+    vehicles: [
+      {
+        id: 'amb-bom-1',
+        type: 'ambulance',
+        name: 'Lilavati Cardiac Emergency Response Ambulance',
+        lat: 19.0600,
+        lng: 72.8530,
+        speedKmh: 68,
+        status: 'emergency_priority',
+        destination: 'Lilavati Hospital, Bandra West',
+        etaMin: 7,
+        detail: 'BKC Signal Clearance Override Active',
+      },
+      {
+        id: 'bus-bom-1',
+        type: 'city_bus',
+        name: 'BEST AC Electric Bus #A-340',
+        lat: 19.0178,
+        lng: 72.8478,
+        speedKmh: 18,
+        status: 'active_transit',
+        destination: 'Chhatrapati Shivaji Maharaj Terminus (CSMT)',
+        detail: 'Occupancy: 90%',
+      },
+      {
+        id: 'cluster-bom-1',
+        type: 'high_traffic_cluster',
+        name: 'Bandra-Worli Sea Link Toll Bottleneck',
+        lat: 19.0330,
+        lng: 72.8170,
+        speedKmh: 6,
+        status: 'heavy_congestion',
+        destination: 'Worli Seaface Expressway',
+        detail: '2,100 Vehicles Queued (95% Gridlock)',
       },
     ],
     junctions: [
@@ -330,6 +484,42 @@ export const CITIES: Record<string, CityConfig> = {
           [78.4072, 17.4319],
           [78.4682, 17.4448],
         ],
+      },
+    ],
+    vehicles: [
+      {
+        id: 'amb-hyd-1',
+        type: 'ambulance',
+        name: 'Apollo Jubilee Hills Emergency Ambulance (TS-09-EM-8080)',
+        lat: 17.4319,
+        lng: 78.4072,
+        speedKmh: 62,
+        status: 'emergency_priority',
+        destination: 'Apollo Hospital, Jubilee Hills Rd #92',
+        etaMin: 6,
+        detail: 'Green Corridor Signal Override Active',
+      },
+      {
+        id: 'bus-hyd-1',
+        type: 'city_bus',
+        name: 'TSRTC Pushpak Airport Liner #219',
+        lat: 17.4504,
+        lng: 78.3808,
+        speedKmh: 28,
+        status: 'active_transit',
+        destination: 'Rajiv Gandhi International Airport',
+        detail: 'Occupancy: 76%',
+      },
+      {
+        id: 'cluster-hyd-1',
+        type: 'high_traffic_cluster',
+        name: 'Cyber Towers Chokepoint Cluster',
+        lat: 17.4504,
+        lng: 78.3808,
+        speedKmh: 10,
+        status: 'heavy_congestion',
+        destination: 'Mindspace Junction Corridor',
+        detail: '1,520 Vehicles Queued',
       },
     ],
     junctions: [
