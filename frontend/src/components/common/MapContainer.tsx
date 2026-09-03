@@ -99,19 +99,9 @@ function buildMapStyle(tileUrl: string) {
   };
 }
 
-/** Remove all markers whose element carries the given data-key attribute. */
-function clearMarkers(map: maplibregl.Map, key: string) {
-  const markers = maplibregl.Marker.getAll?.() ?? [];
-  for (const m of markers) {
-    const el = m.getElement();
-    if (el.dataset[key]) m.remove();
-  }
-}
-
 export const MapContainer: React.FC<MapProps> = ({
   junctions = [],
   incidents = [],
-  digitalTwinNodes = [],
   routes = [],
   roadGeoJSON,
   greenCorridors = [],
@@ -124,7 +114,6 @@ export const MapContainer: React.FC<MapProps> = ({
   const { selectedCity, setSelectedCity } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersKeyRef = useRef(0); // bumped on each marker refresh
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
@@ -212,7 +201,7 @@ export const MapContainer: React.FC<MapProps> = ({
     // After the base style loads, add the initial GeoJSON + markers + routes.
     map.on('load', () => {
       try {
-        addRoadSource(map, roadGeoJSON || cityConfig.roadsGeoJSON, showTrafficLayer);
+        addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
         addRouteLayers(map, routes);
         addGreenCorridorLayers(map, greenCorridors);
       } catch (e) { console.warn('[MapContainer] load layers error:', e); }
@@ -238,7 +227,7 @@ export const MapContainer: React.FC<MapProps> = ({
     map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url));
     // Wait for the new style to load before re-adding custom layers
     const onStyleLoad = () => {
-      addRoadSource(map, roadGeoJSON || cityConfig.roadsGeoJSON, showTrafficLayer);
+      addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
       addRouteLayers(map, routes);
     };
     map.once('style.load', onStyleLoad);
@@ -249,7 +238,7 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    addRoadSource(map, roadGeoJSON || cityConfig.roadsGeoJSON, showTrafficLayer);
+    addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
   }, [roadGeoJSON, showTrafficLayer, cityConfig]);
 
   // Update green corridors on map
@@ -509,31 +498,6 @@ export const MapContainer: React.FC<MapProps> = ({
     // Cleanup animation when corridor layers are removed
     const onRemove = () => { if (animFrameId) cancelAnimationFrame(animFrameId); };
     map.once('remove', onRemove);
-  }
-
-  function addTrafficDirectionArrows(map: maplibregl.Map) {
-    // Add arrow symbols to show traffic flow direction along road segments
-    try {
-      if (map.getLayer('road-arrows')) map.removeLayer('road-arrows');
-      if (!map.getSource('road-segments-src')) return;
-
-      map.addLayer({
-        id: 'road-arrows',
-        type: 'symbol',
-        source: 'road-segments-src',
-        layout: {
-          'symbol-placement': 'line',
-          'text-field': '▶',
-          'text-size': 10,
-          'symbol-spacing': 120,
-          'symbol-avoid-edges': true,
-        },
-        paint: {
-          'text-color': '#94a3b8',
-          'text-opacity': 0.4,
-        },
-      });
-    } catch { /* arrow layer not supported — ignore */ }
   }
 
   function addIncidentMarkers(map: maplibregl.Map, incList: Incident[]) {

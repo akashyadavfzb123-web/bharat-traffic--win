@@ -36,7 +36,7 @@ export const AdminLiveTraffic: React.FC = () => {
   const [filterMode, setFilterMode] = useState<'all' | 'critical' | 'adaptive'>('all');
   const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
-  const [greenCorridors, setGreenCorridors] = useState(corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS));
+  const [greenCorridors] = useState(corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS));
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
 
