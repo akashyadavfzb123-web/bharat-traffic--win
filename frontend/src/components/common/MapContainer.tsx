@@ -12,12 +12,7 @@ import {
   Search,
   MapPin,
   X,
-  Zap,
   Globe,
-  Camera,
-  Radio,
-  AlertTriangle,
-  Bus,
 } from 'lucide-react';
 
 interface MapProps {
@@ -100,11 +95,6 @@ export const MapContainer: React.FC<MapProps> = ({
   const searchMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
-  const [showTrafficLayer, setShowTrafficLayer] = useState(true);
-  const [showIncidents, setShowIncidents] = useState(true);
-  const [showCameras, setShowCameras] = useState(true);
-  const [showSensors, setShowSensors] = useState(true);
-  const [showTransit, setShowTransit] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
@@ -250,8 +240,8 @@ export const MapContainer: React.FC<MapProps> = ({
     const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
     if (map.getSource('road-segments-src')) {
       (map.getSource('road-segments-src') as maplibregl.GeoJSONSource).setData(targetGeoJSON as any);
-      map.setLayoutProperty('road-segments-line', 'visibility', showTrafficLayer ? 'visible' : 'none');
-      map.setLayoutProperty('road-segments-glow', 'visibility', showTrafficLayer ? 'visible' : 'none');
+      map.setLayoutProperty('road-segments-line', 'visibility', 'visible');
+      map.setLayoutProperty('road-segments-glow', 'visibility', 'visible');
     } else if (targetGeoJSON) {
       map.addSource('road-segments-src', {
         type: 'geojson',
@@ -265,7 +255,7 @@ export const MapContainer: React.FC<MapProps> = ({
         layout: {
           'line-join': 'round',
           'line-cap': 'round',
-          visibility: showTrafficLayer ? 'visible' : 'none',
+          visibility: 'visible',
         },
         paint: {
           'line-color': [
@@ -289,7 +279,7 @@ export const MapContainer: React.FC<MapProps> = ({
         layout: {
           'line-join': 'round',
           'line-cap': 'round',
-          visibility: showTrafficLayer ? 'visible' : 'none',
+          visibility: 'visible',
         },
         paint: {
           'line-color': [
@@ -458,10 +448,7 @@ export const MapContainer: React.FC<MapProps> = ({
         incidentMarkersRef.current.set(inc.id, { marker, el });
       }
     });
-    // Toggle visibility
-    incidentMarkersRef.current.forEach((item) => {
-      item.el.style.display = showIncidents ? '' : 'none';
-    });
+
 
     // 4. Render / Update Camera Markers (Synthetic)
     cameras.forEach((cam) => {
@@ -487,9 +474,7 @@ export const MapContainer: React.FC<MapProps> = ({
         .addTo(map);
       cameraMarkersRef.current.set(cam.id, { marker, el });
     });
-    cameraMarkersRef.current.forEach((item) => {
-      item.el.style.display = showCameras ? '' : 'none';
-    });
+
 
     // 5. Render / Update Sensor Markers (Synthetic)
     sensors.forEach((sens) => {
@@ -516,9 +501,7 @@ export const MapContainer: React.FC<MapProps> = ({
         .addTo(map);
       sensorMarkersRef.current.set(sens.id, { marker, el });
     });
-    sensorMarkersRef.current.forEach((item) => {
-      item.el.style.display = showSensors ? '' : 'none';
-    });
+
 
     // 6. Render / Update Bus Stop Markers (Synthetic Transit)
     busStops.forEach((b) => {
@@ -542,9 +525,7 @@ export const MapContainer: React.FC<MapProps> = ({
         .addTo(map);
       busStopMarkersRef.current.set(b.id, { marker, el });
     });
-    busStopMarkersRef.current.forEach((item) => {
-      item.el.style.display = showTransit ? '' : 'none';
-    });
+
 
     // 7. Render / Update Metro Station Markers (Synthetic Transit)
     metroStations.forEach((m) => {
@@ -568,9 +549,7 @@ export const MapContainer: React.FC<MapProps> = ({
         .addTo(map);
       metroMarkersRef.current.set(m.id, { marker, el });
     });
-    metroMarkersRef.current.forEach((item) => {
-      item.el.style.display = showTransit ? '' : 'none';
-    });
+
 
     // 8. Render / Update Junction Markers PERSISTENTLY (No remove/recreate!)
     const activeJunctions = (junctions && junctions.length > 0) ? junctions : cityConfig.junctions;
@@ -719,7 +698,7 @@ export const MapContainer: React.FC<MapProps> = ({
     if (mapRef.current && isMapLoadedRef.current) {
       updateMapData(mapRef.current);
     }
-  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, selectedRouteId, showTrafficLayer, showIncidents, showCameras, showSensors, showTransit, cameras, sensors, busStops, metroStations]);
+  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, selectedRouteId, cameras, sensors, busStops, metroStations]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
@@ -784,165 +763,47 @@ export const MapContainer: React.FC<MapProps> = ({
           )}
         </div>
 
-        {/* 3. Map Controls: 5 Layer Toggles + Style Menu */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {/* Traffic Layer Toggle */}
+        {/* Map Style Selector Dropdown */}
+        <div className="relative">
           <button
-            onClick={() => setShowTrafficLayer(!showTrafficLayer)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
-              showTrafficLayer
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-            }`}
+            onClick={() => setShowStyleMenu(!showStyleMenu)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
           >
-            <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
-            <span>Traffic Layer</span>
+            <Layers className="w-3 h-3 text-cyan-400" />
+            <span>{MAP_STYLES[currentStyle].icon}</span>
           </button>
 
-          {/* Incidents Toggle */}
-          <button
-            onClick={() => setShowIncidents(!showIncidents)}
-            title="Toggle Traffic Incidents"
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
-              showIncidents
-                ? 'bg-red-500/20 text-red-300 border-red-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
-            }`}
-          >
-            <AlertTriangle className={`w-3 h-3 ${showIncidents ? 'text-red-400' : ''}`} />
-            <span>Incidents</span>
-          </button>
-
-          {/* Cameras Toggle */}
-          <button
-            onClick={() => setShowCameras(!showCameras)}
-            title="Toggle Surveillance Cameras"
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
-              showCameras
-                ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
-            }`}
-          >
-            <Camera className={`w-3 h-3 ${showCameras ? 'text-blue-400' : ''}`} />
-            <span>Cameras</span>
-          </button>
-
-          {/* Sensors Toggle */}
-          <button
-            onClick={() => setShowSensors(!showSensors)}
-            title="Toggle Road Sensors & Weather Stations"
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
-              showSensors
-                ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
-            }`}
-          >
-            <Radio className={`w-3 h-3 ${showSensors ? 'text-purple-400' : ''}`} />
-            <span>Sensors</span>
-          </button>
-
-          {/* Transit Toggle */}
-          <button
-            onClick={() => setShowTransit(!showTransit)}
-            title="Toggle Bus Stops & Metro Stations"
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono border transition-all ${
-              showTransit
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
-            }`}
-          >
-            <Bus className={`w-3 h-3 ${showTransit ? 'text-cyan-400' : ''}`} />
-            <span>Transit</span>
-          </button>
-
-          {/* Synthetic Demo Badge */}
-          <span className="px-2 py-1 rounded-md text-[9px] font-bold font-mono bg-amber-500/15 text-amber-400 border border-amber-500/30 hidden sm:flex items-center gap-1">
-            SYNTHETIC DEMO
-          </span>
-
-          {/* Map Style Selector Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowStyleMenu(!showStyleMenu)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
-            >
-              <Layers className="w-3 h-3 text-cyan-400" />
-              <span>{MAP_STYLES[currentStyle].icon}</span>
-            </button>
-
-            {showStyleMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
-                <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
-                {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
-                  <button
-                    key={styleKey}
-                    onClick={() => {
-                      setCurrentStyle(styleKey);
-                      setShowStyleMenu(false);
-                    }}
-                    className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
-                      currentStyle === styleKey
-                        ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    <span>{MAP_STYLES[styleKey].name}</span>
-                    <span>{MAP_STYLES[styleKey].icon}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {showStyleMenu && (
+            <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
+              <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
+              {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
+                <button
+                  key={styleKey}
+                  onClick={() => {
+                    setCurrentStyle(styleKey);
+                    setShowStyleMenu(false);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                    currentStyle === styleKey
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <span>{MAP_STYLES[styleKey].name}</span>
+                  <span>{MAP_STYLES[styleKey].icon}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
       </div>
 
       {/* Main Map Container Canvas */}
       <div className="flex-1 relative">
         <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-        {/* Legend Overlay */}
-        <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1.5 z-10 shadow-lg font-mono max-w-[260px]">
-          <div className="font-bold text-slate-400 text-[10px] uppercase flex items-center justify-between gap-4">
-            <span>{selectedCity} Traffic Flow (Speed)</span>
-            <span className="text-amber-400 text-[9px]">SYNTHETIC DEMO</span>
-          </div>
 
-          {/* Traffic Flow Speed */}
-          <div className="space-y-0.5 text-[10px] pt-1">
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
-              <span>Green (&gt; 40 km/h)</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
-              <span>Yellow (20–40 km/h)</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-1 bg-red-500 inline-block rounded shadow-[0_0_8px_#ef4444]" />
-              <span className="text-red-400">Red (&lt; 20 km/h)</span>
-            </div>
-          </div>
-
-          {/* Separator */}
-          <div className="border-t border-slate-800 pt-1 space-y-0.5 text-[10px]">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs">⚠️</span>
-              <span className="text-red-300">Incident</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs">📷</span>
-              <span className="text-blue-300">Camera</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs">🚌</span>
-              <span className="text-cyan-300">Bus Stop</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs">🚇</span>
-              <span className="text-emerald-300">Metro Station</span>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
