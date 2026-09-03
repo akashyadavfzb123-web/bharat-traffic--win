@@ -5,6 +5,7 @@ import type { Junction, Incident, RouteOption, DigitalTwinNode } from '../../typ
 import type { RoadGeoJSONCollection, RoadSegmentProperties } from '../../data/mockGeoJSON';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
+import { fetchRoadGeometry } from '../../services/roadGeometryService';
 import { useApp } from '../../context/AppContext';
 import {
   Layers,
@@ -224,10 +225,13 @@ export const MapContainer: React.FC<MapProps> = ({
     canvas.addEventListener('webglcontextlost', onContextLost);
     canvas.addEventListener('webglcontextrestored', onContextRestored);
 
-    // After the base style loads, add the initial GeoJSON + markers + routes.
-    map.on('load', () => {
+    // After the base style loads, fetch real road geometry from OSM, then add layers.
+    map.on('load', async () => {
       try {
-        addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
+        // Fetch real road geometry from OpenStreetMap so traffic lines follow actual roads
+        const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+        const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+        addRoadSource(map, realGeoJSON, showTrafficLayer);
         addRouteLayers(map, routes);
         addGreenCorridorLayers(map, greenCorridors);
       } catch (e) { console.warn('[MapContainer] load layers error:', e); }
@@ -252,8 +256,10 @@ export const MapContainer: React.FC<MapProps> = ({
     if (!map) return;
     map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
     // Wait for the new style to load before re-adding custom layers
-    const onStyleLoad = () => {
-      addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
+    const onStyleLoad = async () => {
+      const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+      const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+      addRoadSource(map, realGeoJSON, showTrafficLayer);
       addRouteLayers(map, routes);
     };
     map.once('style.load', onStyleLoad);
@@ -264,7 +270,11 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    addRoadSource(map, (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection, showTrafficLayer);
+    (async () => {
+      const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+      const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+      addRoadSource(map, realGeoJSON, showTrafficLayer);
+    })();
   }, [roadGeoJSON, showTrafficLayer, cityConfig]);
 
   // Update green corridors on map
@@ -547,202 +557,222 @@ export const MapContainer: React.FC<MapProps> = ({
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
       {/* Top Map Header Control Bar: 4-City Tabs + Search + Style Menu */}
       <div className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0">
-        {/* 1. City Switcher Dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setShowCityMenu(!showCityMenu)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-cyan-300 hover:text-cyan-200 hover:border-cyan-500/40 transition-all"
-          >
-            <Globe className="w-3 h-3 text-cyan-400" />
-            <span>{selectedCity}</span>
-            <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${showCityMenu ? 'rotate-180' : ''}`} />
-          </button>
-          {showCityMenu && (
-            <div className="absolute left-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 w-44 font-mono text-xs space-y-0.5">
-              <div className="text-[9px] text-slate-500 font-bold px-2 py-1 uppercase">Switch Metro</div>
-              {Object.keys(CITIES).map((cityName) => {
-                const city = CITIES[cityName];
-                const worstArea = city.areas?.reduce((w, a) => a.congestion > w.congestion ? a : w, city.areas[0]);
-                return (
+        {/* When search is focused: full-width search bar. Otherwise: normal layout */}
+        {showSuggestions ? (
+          /* ── EXPANDED SEARCH MODE ── */
+          <div className="relative flex-1 w-full">
+            <div className="flex items-center gap-2 w-full">
+              <button
+                onClick={() => { setShowSuggestions(false); setSearchQuery(''); setSearchResults([]); }}
+                className="shrink-0 p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-cyan-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setShowSuggestions(true); }}
+                  placeholder={`Search any place in ${selectedCity}...`}
+                  className="w-full pl-10 pr-8 py-2 bg-slate-950 border border-cyan-500/50 rounded-lg text-sm font-mono text-slate-100 focus:outline-none focus:border-cyan-400 shadow-lg shadow-cyan-500/10"
+                />
+                {searchQuery && (
                   <button
-                    key={cityName}
-                    onClick={() => handleCitySelect(cityName)}
-                    className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
-                      selectedCity === cityName
-                        ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                    }`}
+                    onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
                   >
-                    <span>{cityName}</span>
-                    {worstArea && (
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded ${
-                        worstArea.congestion > 85 ? 'bg-red-500/20 text-red-400' :
-                        worstArea.congestion > 60 ? 'bg-amber-500/20 text-amber-400' :
-                        'bg-emerald-500/20 text-emerald-400'
-                      }`}>{worstArea.congestion}%</span>
-                    )}
+                    <X className="w-4 h-4" />
                   </button>
-                );
-              })}
+                )}
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* 2. Area Tabs — heavy-traffic zones for the selected city */}
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
-          <span className="text-[10px] font-mono text-cyan-400 px-2 font-bold flex items-center gap-1 hidden sm:flex">
-            <Zap className="w-3 h-3" />
-            AREAS:
-          </span>
-          {cityConfig.areas.map((area) => (
-            <button
-              key={area.name}
-              onClick={() => handleAreaSelect(area)}
-              className="group flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold font-mono transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
-            >
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                area.congestion > 85 ? 'bg-red-500 shadow-sm shadow-red-500/50' :
-                area.congestion > 60 ? 'bg-amber-400' :
-                area.congestion > 35 ? 'bg-yellow-400' :
-                'bg-emerald-400'
-              }`} />
-              <span>{area.name}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* 3. City-Scoped Location Search Bar with Suggestions */}
-          <div className="relative flex-1 max-w-xs">
+            {/* Dropdown below the search bar */}
+            <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-40 max-h-72 overflow-y-auto font-mono text-xs">
+              {searchResults.length > 0 ? (
+                /* Search Results */
+                <>
+                  <div className="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>{searchResults.length} Results</span>
+                    <span className="text-cyan-500">{selectedCity}</span>
+                  </div>
+                  {searchResults.map((res) => (
+                    <div
+                      key={res.place_id}
+                      onClick={() => { handleSelectSearchResult(res); setShowSuggestions(false); }}
+                      className="px-3 py-2.5 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-start gap-3 transition-colors"
+                    >
+                      <div className="shrink-0 mt-0.5">
+                        {res.source === 'local' ? (
+                          <div className="w-6 h-6 rounded-md bg-cyan-500/20 flex items-center justify-center">
+                            <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                          </div>
+                        ) : (
+                          <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                            <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 font-medium truncate">{res.display_name.split(',')[0]}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{res.display_name.split(',').slice(1, 3).join(',')}</div>
+                      </div>
+                      {res.source === 'local' && (
+                        <span className="shrink-0 text-[8px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded mt-0.5">LOCAL</span>
+                      )}
+                    </div>
+                  ))}
+                </>
+              ) : (
+                /* Popular Areas when no query */
+                <>
+                  <div className="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                    Popular in {selectedCity}
+                  </div>
+                  {mapSearchService.getPopularAreas(selectedCity).slice(0, 6).map((area) => (
+                    <div
+                      key={area.name}
+                      onClick={() => { setSearchQuery(area.name); setShowSuggestions(true); }}
+                      className="px-3 py-2.5 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-center gap-3 transition-colors"
+                    >
+                      <div className="w-6 h-6 rounded-md bg-cyan-500/20 flex items-center justify-center shrink-0">
+                        <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 font-medium truncate">{area.name}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{area.description}</div>
+                      </div>
+                      <span className="shrink-0 text-[8px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                        {area.category}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* ── NORMAL MODE: City + Areas + Compact Search + Controls ── */
+          <>
+            {/* 1. City Switcher */}
             <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setShowSuggestions(true); }}
-                onFocus={() => setShowSuggestions(true)}
-                placeholder={`Search areas, roads, landmarks in ${selectedCity}...`}
-                className="w-full pl-8 pr-7 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(''); setSearchResults([]); setShowSuggestions(false); }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+              <button
+                onClick={() => setShowCityMenu(!showCityMenu)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-cyan-300 hover:text-cyan-200 hover:border-cyan-500/40 transition-all"
+              >
+                <Globe className="w-3 h-3 text-cyan-400" />
+                <span>{selectedCity}</span>
+                <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${showCityMenu ? 'rotate-180' : ''}`} />
+              </button>
+              {showCityMenu && (
+                <div className="absolute left-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 w-44 font-mono text-xs space-y-0.5">
+                  <div className="text-[9px] text-slate-500 font-bold px-2 py-1 uppercase">Switch Metro</div>
+                  {Object.keys(CITIES).map((cityName) => {
+                    const city = CITIES[cityName];
+                    const worstArea = city.areas?.reduce((w, a) => a.congestion > w.congestion ? a : w, city.areas[0]);
+                    return (
+                      <button
+                        key={cityName}
+                        onClick={() => handleCitySelect(cityName)}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                          selectedCity === cityName
+                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>{cityName}</span>
+                        {worstArea && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                            worstArea.congestion > 85 ? 'bg-red-500/20 text-red-400' :
+                            worstArea.congestion > 60 ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-emerald-500/20 text-emerald-400'
+                          }`}>{worstArea.congestion}%</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
-            {/* Search Results (from typing) */}
-            {searchResults.length > 0 && showSuggestions && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 max-h-56 overflow-y-auto font-mono text-xs">
-                <div className="px-2.5 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                  <span>Search Results</span>
-                  <span className="text-cyan-500">in {selectedCity}</span>
-                </div>
-                {searchResults.map((res) => (
-                  <div
-                    key={res.place_id}
-                    onClick={() => { handleSelectSearchResult(res); setShowSuggestions(false); }}
-                    className="px-2.5 py-2 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-start gap-2.5 text-[11px] transition-colors"
-                  >
-                    <div className="shrink-0 mt-0.5">
-                      {res.source === 'local' ? (
-                        <div className="w-5 h-5 rounded-md bg-cyan-500/20 flex items-center justify-center">
-                          <MapPin className="w-3 h-3 text-cyan-400" />
-                        </div>
-                      ) : (
-                        <div className="w-5 h-5 rounded-md bg-emerald-500/20 flex items-center justify-center">
-                          <Globe className="w-3 h-3 text-emerald-400" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-slate-200 font-medium truncate">{res.display_name.split(',')[0]}</div>
-                      <div className="text-[10px] text-slate-500 truncate">{res.display_name.split(',').slice(1).join(',')}</div>
-                    </div>
-                    {res.source === 'local' && (
-                      <span className="shrink-0 text-[9px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded mt-0.5">LOCAL</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* 2. Area Tabs */}
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-mono text-cyan-400 px-2 font-bold flex items-center gap-1 hidden sm:flex">
+                <Zap className="w-3 h-3" />
+                AREAS:
+              </span>
+              {cityConfig.areas.map((area) => (
+                <button
+                  key={area.name}
+                  onClick={() => handleAreaSelect(area)}
+                  className="group flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold font-mono transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    area.congestion > 85 ? 'bg-red-500 shadow-sm shadow-red-500/50' :
+                    area.congestion > 60 ? 'bg-amber-400' :
+                    area.congestion > 35 ? 'bg-yellow-400' :
+                    'bg-emerald-400'
+                  }`} />
+                  <span>{area.name}</span>
+                </button>
+              ))}
+            </div>
 
-            {/* Popular Areas Suggestions (when focused but no query) */}
-            {searchQuery.trim().length < 2 && showSuggestions && searchResults.length === 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 font-mono text-xs">
-                <div className="px-2.5 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
-                  🔥 Popular Areas in {selectedCity}
-                </div>
-                {mapSearchService.getPopularAreas(selectedCity).map((area) => (
-                  <div
-                    key={area.name}
-                    onClick={() => { setSearchQuery(area.name); setShowSuggestions(true); }}
-                    className="px-2.5 py-2 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-center gap-2.5 text-[11px] transition-colors"
-                  >
-                    <div className="w-5 h-5 rounded-md bg-cyan-500/20 flex items-center justify-center shrink-0">
-                      <MapPin className="w-3 h-3 text-cyan-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-slate-200 font-medium">{area.name}</div>
-                      <div className="text-[10px] text-slate-500">{area.description}</div>
-                    </div>
-                    <span className="shrink-0 text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                      {area.category}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-        {/* 3. Map Controls: Traffic Toggle & Style Switcher */}
-        <div className="flex items-center gap-2">
-          {/* Live Traffic Toggle */}
-          <button
-            onClick={() => setShowTrafficLayer(!showTrafficLayer)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
-              showTrafficLayer
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
-                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-            }`}
-          >
-            <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
-            <span className="hidden md:inline">Traffic Layer</span>
-          </button>
-
-          {/* Map Style Selector Dropdown */}
-          <div className="relative">
+            {/* 3. Compact Search Trigger */}
             <button
-              onClick={() => setShowStyleMenu(!showStyleMenu)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
+              onClick={() => setShowSuggestions(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all"
             >
-              <Layers className="w-3 h-3 text-cyan-400" />
-              <span>{MAP_STYLES[currentStyle].icon}</span>
+              <Search className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Search</span>
             </button>
 
-            {showStyleMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
-                <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
-                {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
-                  <button
-                    key={styleKey}
-                    onClick={() => { setCurrentStyle(styleKey); setShowStyleMenu(false); }}
-                    className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
-                      currentStyle === styleKey
-                        ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    <span>{MAP_STYLES[styleKey].name}</span>
-                    <span>{MAP_STYLES[styleKey].icon}</span>
-                  </button>
-                ))}
+            {/* 4. Controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowTrafficLayer(!showTrafficLayer)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+                  showTrafficLayer
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
+                <span className="hidden md:inline">Traffic Layer</span>
+              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowStyleMenu(!showStyleMenu)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
+                >
+                  <Layers className="w-3 h-3 text-cyan-400" />
+                  <span>{MAP_STYLES[currentStyle].icon}</span>
+                </button>
+                {showStyleMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
+                    <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
+                    {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
+                      <button
+                        key={styleKey}
+                        onClick={() => { setCurrentStyle(styleKey); setShowStyleMenu(false); }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                          currentStyle === styleKey
+                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>{MAP_STYLES[styleKey].name}</span>
+                        <span>{MAP_STYLES[styleKey].icon}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Close suggestions / city menu on outside click */}
