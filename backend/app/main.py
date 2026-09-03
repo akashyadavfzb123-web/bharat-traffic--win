@@ -24,9 +24,17 @@ setup_logging(debug=settings.DEBUG)
 
 app = FastAPI(title=settings.APP_NAME, docs_url="/docs" if settings.DEBUG else None, redoc_url=None)
 
+# Comprehensive CORS Configuration for Vercel & Localhost
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://bharat-traffic-win.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=origins + settings.CORS_ORIGINS,
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
