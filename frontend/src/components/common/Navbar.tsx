@@ -21,8 +21,8 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
-  const { role, setRole, selectedCity, setSelectedCity } = useApp();
-  const { user, logout } = useAuth();
+  const { selectedCity, setSelectedCity } = useApp();
+  const { user, logout, role } = useAuth();
   const { isRunning, toggleSimulation, snapshot, speed, setSpeed } = useRealtime();
   const navigate = useNavigate();
 
@@ -33,30 +33,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
     return () => clearInterval(timer);
   }, []);
 
-  const handleRoleToggle = (newRole: 'user' | 'admin') => {
-    setRole(newRole);
-    if (newRole === 'admin') {
-      navigate('/admin/dashboard');
-    } else {
-      navigate('/user/dashboard');
-    }
-  };
-
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
-
-  // Sync app role with auth user role on login/logout
-  const prevUserRef = React.useRef(user);
-  React.useEffect(() => {
-    const prevUser = prevUserRef.current;
-    prevUserRef.current = user;
-    // On fresh login (new user), sync backend role to app
-    if (user && (!prevUser || prevUser.id !== user.id)) {
-      setRole(user.role);
-    }
-  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isAdmin = role === 'admin';
 
@@ -190,46 +170,27 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
         </div>
       </div>
 
-      {/* Right: User info + Role Switcher + Logout */}
+      {/* Right: User info + Role Badge + Logout */}
       <div className="flex items-center gap-2">
-        {/* User Info */}
+        {/* User Name */}
         {user && (
           <div className="hidden sm:flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs">
-            <span className="text-slate-400">{user.name}</span>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-              user.role === 'admin' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-cyan-500/20 text-cyan-400'
-            }`}>
-              {user.role.toUpperCase()}
-            </span>
+            <span className="text-slate-300 font-medium">{user.name}</span>
           </div>
         )}
 
-        {/* Role Switcher */}
-        <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800">
-          <button
-            onClick={() => handleRoleToggle('user')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-              role === 'user'
-                ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <User className="w-3 h-3" />
-            <span className="hidden sm:inline">User Portal</span>
-            <span className="sm:hidden">User</span>
-          </button>
-          <button
-            onClick={() => handleRoleToggle('admin')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-              role === 'admin'
-                ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Shield className="w-3 h-3" />
-            <span className="hidden sm:inline">Admin Command</span>
-            <span className="sm:hidden">Admin</span>
-          </button>
+        {/* Role Badge (no switcher — role is fixed after login) */}
+        <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-800 bg-slate-950">
+          {isAdmin ? (
+            <Shield className="w-3 h-3 text-emerald-400" />
+          ) : (
+            <User className="w-3 h-3 text-cyan-400" />
+          )}
+          <span className={`text-xs font-semibold ${
+            isAdmin ? 'text-emerald-400' : 'text-cyan-400'
+          }`}>
+            {isAdmin ? 'Admin' : 'User'}
+          </span>
         </div>
 
         {/* Logout Button */}

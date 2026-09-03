@@ -100,8 +100,8 @@ manager = ConnectionManager()
 def _verify_ws_token(token: str) -> bool:
     """Verify a JWT token for WebSocket authentication."""
     try:
-        from app.core.security import verify_token
-        payload = verify_token(token)
+        from app.core.security import decode_access_token
+        payload = decode_access_token(token)
         return payload is not None
     except Exception:
         return False

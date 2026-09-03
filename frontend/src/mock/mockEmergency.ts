@@ -207,3 +207,20 @@ export const MOCK_EMERGENCY_CORRIDORS: EmergencyCorridorData[] = [
 export function getActiveCorridorCount(corridors: EmergencyCorridorData[]): number {
   return corridors.filter((c) => c.status === 'active' || c.status === 'approved').length;
 }
+
+/** Convert EmergencyCorridorData to the GreenCorridor shape MapContainer expects */
+export function corridorsToMapFormat(corridors: EmergencyCorridorData[]) {
+  return corridors.map((c) => ({
+    id: c.id,
+    vehicleType: c.vehicleType,
+    vehicleCallsign: c.vehicleCallsign,
+    title: c.title,
+    currentLat: c.currentLat,
+    currentLng: c.currentLng,
+    destLat: c.destLat,
+    destLng: c.destLng,
+    etaMin: c.route.emergencyEtaMin,
+    status: c.status === 'active' ? 'active' : c.status === 'approved' ? 'approved' : 'idle',
+    coordinates: c.route.coordinates,
+  }));
+}

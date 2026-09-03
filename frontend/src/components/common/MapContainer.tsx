@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Junction, Incident, RouteOption, DigitalTwinNode } from '../../types/traffic';
@@ -6,6 +6,7 @@ import type { RoadGeoJSONCollection, RoadSegmentProperties } from '../../data/mo
 import type { SyntheticCamera, SyntheticSensor, SyntheticBusStop, SyntheticMetroStation } from '../../types/synthetic';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
+import { fetchRoadGeometry } from '../../services/roadGeometryService';
 import { useApp } from '../../context/AppContext';
 import {
   Layers,
@@ -13,7 +14,23 @@ import {
   MapPin,
   X,
   Globe,
+  ChevronDown,
+  Zap,
 } from 'lucide-react';
+
+interface GreenCorridor {
+  id: string;
+  vehicleType: string;
+  vehicleCallsign: string;
+  title: string;
+  currentLat: number;
+  currentLng: number;
+  destLat: number;
+  destLng: number;
+  etaMin: number;
+  status: string;
+  coordinates: [number, number][];
+}
 
 interface MapProps {
   junctions?: Junction[];
@@ -21,6 +38,7 @@ interface MapProps {
   digitalTwinNodes?: DigitalTwinNode[];
   routes?: RouteOption[];
   roadGeoJSON?: RoadGeoJSONCollection;
+  greenCorridors?: GreenCorridor[];
   selectedRoadId?: string | null;
   selectedJunctionId?: string | null;
   selectedRouteId?: string | null;
@@ -40,36 +58,82 @@ interface MapProps {
 
 type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets';
 
-const MAP_STYLES: Record<MapStyleType, { name: string; url: string; icon: string }> = {
+// All tile sources are free — no API keys required.
+// Dark and traffic modes use OSM raster tiles with paint overrides for the visual style.
+const OSM_TILE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const ARCGIS_SATELLITE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+
+interface MapStyleDef {
+  name: string;
+  url: string;
+  icon: string;
+  /** Optional raster paint overrides applied to the base tile layer. */
+  paint?: Record<string, unknown>;
+}
+
+const MAP_STYLES: Record<MapStyleType, MapStyleDef> = {
   dark: {
     name: 'Command Dark',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    url: import.meta.env.VITE_MAP_DARK_URL || OSM_TILE,
     icon: '🌙',
+    paint: {
+      'raster-saturation': -0.85,
+      'raster-brightness-max': 0.18,
+      'raster-contrast': 0.1,
+    },
   },
   satellite: {
     name: 'Satellite Aerial',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    url: import.meta.env.VITE_MAP_SATELLITE_URL || ARCGIS_SATELLITE,
     icon: '🛰️',
   },
   traffic: {
     name: 'Traffic Density',
-    url: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    url: import.meta.env.VITE_MAP_TRAFFIC_URL || OSM_TILE,
     icon: '🚦',
+    paint: {
+      'raster-saturation': -0.4,
+      'raster-brightness-max': 0.65,
+    },
   },
   streets: {
     name: 'Standard Streets',
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    url: import.meta.env.VITE_MAP_STREETS_URL || OSM_TILE,
     icon: '🏙️',
   },
 };
 
+function buildMapStyle(tileUrl: string, paint?: Record<string, unknown>) {
+  return {
+    version: 8 as const,
+    sources: {
+      'base-tile-src': {
+        type: 'raster' as const,
+        tiles: [tileUrl],
+        tileSize: 256,
+        attribution: '&copy; OpenStreetMap',
+      },
+    },
+    layers: [
+      {
+        id: 'base-tile-layer',
+        type: 'raster' as const,
+        source: 'base-tile-src',
+        minzoom: 0,
+        maxzoom: 19,
+        ...(paint || {}),
+      },
+    ],
+  };
+}
+
 export const MapContainer: React.FC<MapProps> = ({
   junctions = [],
   incidents = [],
-  digitalTwinNodes = [],
   routes = [],
   roadGeoJSON,
   selectedRouteId,
+  greenCorridors = [],
   onRoadClick,
   onJunctionClick,
   center,
@@ -100,7 +164,16 @@ export const MapContainer: React.FC<MapProps> = ({
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
+  const [showCityMenu, setShowCityMenu] = useState(false);
+  const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+
+  // Refs that hold the latest props for use in callbacks without re-creating the map
+  const onRoadClickRef = useRef(onRoadClick);
+  const onJunctionClickRef = useRef(onJunctionClick);
+  useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
+  useEffect(() => { onJunctionClickRef.current = onJunctionClick; }, [onJunctionClick]);
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
@@ -141,18 +214,17 @@ export const MapContainer: React.FC<MapProps> = ({
       setSearchResults([]);
       return;
     }
-
     const timer = setTimeout(async () => {
       const results = await mapSearchService.searchLocations(searchQuery, selectedCity);
       setSearchResults(results);
     }, 400);
-
     return () => clearTimeout(timer);
   }, [searchQuery, selectedCity]);
 
-  // Handle City Change
-  const handleCitySelect = (cityName: string) => {
+  // Handle City Change (fly to, don't recreate map)
+  const handleCitySelect = useCallback((cityName: string) => {
     setSelectedCity(cityName);
+    setShowCityMenu(false);
     const targetCity = CITIES[cityName];
     if (mapRef.current && targetCity) {
       clearAllMarkers();
@@ -162,9 +234,15 @@ export const MapContainer: React.FC<MapProps> = ({
         speed: 1.2,
       });
     }
-  };
+  }, [setSelectedCity]);
 
-  const handleSelectSearchResult = (res: SearchResult) => {
+  const handleAreaSelect = useCallback((area: { lat: number; lng: number }) => {
+    if (mapRef.current) {
+      mapRef.current.flyTo({ center: [area.lng, area.lat], zoom: 14, speed: 1.5 });
+    }
+  }, []);
+
+  const handleSelectSearchResult = useCallback((res: SearchResult) => {
     const lat = parseFloat(res.lat);
     const lng = parseFloat(res.lon);
     if (!isNaN(lat) && !isNaN(lng) && mapRef.current) {
@@ -182,7 +260,7 @@ export const MapContainer: React.FC<MapProps> = ({
     }
     setSearchResults([]);
     setSearchQuery('');
-  };
+  }, []);
 
   // 1. Initialize Map ONCE per container / currentStyle / selectedCity
   useEffect(() => {
@@ -190,391 +268,230 @@ export const MapContainer: React.FC<MapProps> = ({
     isMapLoadedRef.current = false;
     clearAllMarkers();
 
-    const activeTileUrl = MAP_STYLES[currentStyle].url;
-
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: {
-        version: 8,
-        sources: {
-          'base-tile-src': {
-            type: 'raster',
-            tiles: [activeTileUrl],
-            tileSize: 256,
-            attribution: '&copy; OpenStreetMap &copy; Esri',
-          },
-        },
-        layers: [
-          {
-            id: 'base-tile-layer',
-            type: 'raster',
-            source: 'base-tile-src',
-            minzoom: 0,
-            maxzoom: 19,
-          },
-        ],
-      },
+      style: buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint),
       center: activeCenter,
-      zoom: zoom,
-      interactive: interactive,
+      zoom,
+      interactive,
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     mapRef.current = map;
 
-    map.on('load', () => {
-      isMapLoadedRef.current = true;
-      updateMapData(map);
+    // Handle WebGL context loss gracefully — pause rendering, resume when restored
+    const canvas = map.getCanvas();
+    const onContextLost = (e: Event) => { e.preventDefault(); };
+    const onContextRestored = () => { map.resize(); };
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('webglcontextrestored', onContextRestored);
+
+    // After the base style loads, fetch real road geometry from OSM, then add layers.
+    map.on('load', async () => {
+      try {
+        if (!hideAdminOverlays) {
+          const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+          const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+          addRoadSource(map, realGeoJSON, showTrafficLayer);
+          addGreenCorridorLayers(map, greenCorridors);
+        }
+        addRouteLayers(map, routes);
+      } catch (e) { console.warn('[MapContainer] load layers error:', e); }
+      if (!hideAdminOverlays) {
+        addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
+        addIncidentMarkers(map, incidents);
+      }
     });
 
     return () => {
-      isMapLoadedRef.current = false;
-      clearAllMarkers();
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       map.remove();
       mapRef.current = null;
     };
-  }, [currentStyle, selectedCity]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Mount once only
 
-  // Function to smoothly update layers & markers WITHOUT tearing down or flickering
-  const updateMapData = (map: maplibregl.Map) => {
-    if (!map || !isMapLoadedRef.current) return;
+  // ── Imperative updates when props change (no map recreation) ──
 
-    // 1. Traffic Flow Lines (GeoJSON Source Update) — skipped in user route-planner mode
-    const targetGeoJSON = hideAdminOverlays ? undefined : (roadGeoJSON || cityConfig.roadsGeoJSON);
-    if (map.getSource('road-segments-src')) {
-      (map.getSource('road-segments-src') as maplibregl.GeoJSONSource).setData(targetGeoJSON as any);
-      map.setLayoutProperty('road-segments-line', 'visibility', 'visible');
-      map.setLayoutProperty('road-segments-glow', 'visibility', 'visible');
-    } else if (targetGeoJSON) {
-      map.addSource('road-segments-src', {
-        type: 'geojson',
-        data: targetGeoJSON as unknown as string,
-      });
+  // Update tile style — re-add layers after the new style finishes loading
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
+    // Wait for the new style to load before re-adding custom layers
+    const onStyleLoad = async () => {
+      if (!hideAdminOverlays) {
+        const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+        const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+        addRoadSource(map, realGeoJSON, showTrafficLayer);
+      }
+      addRouteLayers(map, routes);
+    };
+    map.once('style.load', onStyleLoad);
+    return () => { map.off('style.load', onStyleLoad); };
+  }, [currentStyle]);
 
-      map.addLayer({
-        id: 'road-segments-glow',
-        type: 'line',
-        source: 'road-segments-src',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-          visibility: 'visible',
-        },
-        paint: {
-          'line-color': [
-            'step',
-            ['get', 'congestion'],
-            'rgba(34, 197, 94, 0.2)',
-            40,
-            'rgba(234, 179, 8, 0.3)',
-            70,
-            'rgba(239, 68, 68, 0.6)',
-          ],
-          'line-width': 12,
-          'line-blur': 3,
-        },
-      });
+  // Update road GeoJSON source when data or toggle changes (only if style is stable)
+  useEffect(() => {
+    if (hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    (async () => {
+      const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+      const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
+      addRoadSource(map, realGeoJSON, showTrafficLayer);
+    })();
+  }, [roadGeoJSON, showTrafficLayer, cityConfig, hideAdminOverlays]);
 
-      map.addLayer({
-        id: 'road-segments-line',
-        type: 'line',
-        source: 'road-segments-src',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-          visibility: 'visible',
-        },
-        paint: {
-          'line-color': [
-            'step',
-            ['get', 'congestion'],
-            '#22c55e',
-            40,
-            '#eab308',
-            70,
-            '#ef4444',
-          ],
-          'line-width': 7,
-          'line-opacity': 0.9,
-        },
-      });
+  // Update green corridors on map
+  useEffect(() => {
+    if (hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addGreenCorridorLayers(map, greenCorridors);
+  }, [greenCorridors, hideAdminOverlays]);
 
-      map.on('click', 'road-segments-line', (e) => {
-        if (e.features && e.features.length > 0 && onRoadClick) {
-          onRoadClick(e.features[0].properties as any);
-        }
-      });
+  // Update junction markers
+  useEffect(() => {
+    if (hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
+  }, [junctions, cityConfig, selectedCity, hideAdminOverlays]);
 
-      // Add road click popup for synthetic data with all required fields
-      map.on('click', 'road-segments-line', (e) => {
-        if (!e.features || e.features.length === 0) return;
-        const props = e.features[0].properties as any;
-        const coordinates = (e as any).lngLat;
+  // Update incident markers
+  useEffect(() => {
+    if (hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addIncidentMarkers(map, incidents);
+  }, [incidents, hideAdminOverlays]);
 
-        const trafficLevelLabel = props.trafficLevel === 'free_flow'
-          ? '<span style="color: #22c55e; font-weight: bold;">Free Flow</span>'
-          : props.trafficLevel === 'slow'
-          ? '<span style="color: #eab308; font-weight: bold;">Slow Traffic</span>'
-          : props.trafficLevel === 'congested'
-          ? '<span style="color: #ef4444; font-weight: bold;">Congested</span>'
-          : '<span style="color: #dc2626; font-weight: bold;">Gridlock</span>';
+  // Update route layers
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addRouteLayers(map, routes);
+  }, [routes, selectedRouteId]);
 
-        const popupHtml = `
-          <div style="font-family: monospace; padding: 6px; min-width: 220px;">
-            <div style="border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
-              <div style="font-size: 12px; font-weight: bold; color: #38bdf8;">${props.name || 'Unknown Road'}</div>
-            </div>
-            <div style="font-size: 10px; color: #94a3b8; line-height: 1.8;">
-              <div>Speed: <strong style="color: #f8fafc;">${props.speed ?? props.avgSpeedKmh ?? '—'} km/h</strong></div>
-              <div>Traffic Level: ${trafficLevelLabel}</div>
-              <div>Vehicles: <strong style="color: #f8fafc;">${props.vehicleCount ?? '—'}</strong></div>
-              <div>Congestion: <strong style="color: ${props.congestion > 70 ? '#ef4444' : props.congestion > 40 ? '#eab308' : '#22c55e'};">${props.congestion ?? '—'}%</strong></div>
-              <div>Queue Length: <strong style="color: #f8fafc;">${props.queueLength ?? '—'} vehicles</strong></div>
-              <div style="margin-top: 6px; padding: 3px 6px; background: rgba(56, 189, 248, 0.1); border-radius: 4px; color: #38bdf8; font-weight: bold;">
-                Data Source: SYNTHETIC DEMO
-              </div>
-            </div>
-          </div>
-        `;
+  // Auto-fit map bounds to selected route (user route planner mode)
+  useEffect(() => {
+    if (!hideAdminOverlays) return;
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (!routes || routes.length === 0) return;
+    const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes[0];
+    if (!routeToFit || !routeToFit.coordinates || routeToFit.coordinates.length < 2) return;
+    const bounds = routeToFit.coordinates.reduce(
+      (b, coord) => b.extend(coord as maplibregl.LngLatLike),
+      new maplibregl.LngLatBounds(routeToFit.coordinates[0] as maplibregl.LngLatLike, routeToFit.coordinates[0] as maplibregl.LngLatLike),
+    );
+    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 }, maxZoom: 14, duration: 800 });
+  }, [routes, selectedRouteId, hideAdminOverlays]);
 
-        const popup = new maplibregl.Popup({ offset: 15 })
-          .setLngLat(coordinates)
-          .setHTML(popupHtml)
-          .addTo(map);
+  // ── Imperative helpers ──
 
-        // Remove popup on next click
-        map.once('click', () => popup.remove());
-      });
-    }
+  function addRoadSource(map: maplibregl.Map, geoJSON: RoadGeoJSONCollection | undefined, show: boolean) {
+    if (!geoJSON) return;
 
-    // 2. Custom Route Lines
-    (routes || []).forEach((route) => {
+    // Remove old layers/source first (check existence to avoid console errors)
+    if (map.getLayer('road-segments-line')) map.removeLayer('road-segments-line');
+    if (map.getSource('road-segments-src')) map.removeSource('road-segments-src');
+
+    if (!show) return;
+
+    map.addSource('road-segments-src', {
+      type: 'geojson',
+      data: geoJSON as unknown as string,
+    });
+
+    map.addLayer({
+      id: 'road-segments-line',
+      type: 'line',
+      source: 'road-segments-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': [
+          'step', ['get', 'congestion'],
+          '#22c55e', 40, '#eab308', 70, '#ef4444',
+        ],
+        'line-width': 7,
+        'line-opacity': 0.85,
+      },
+    });
+
+    // Re-bind click/hover handlers (callbacks may have changed)
+    map.on('mouseenter', 'road-segments-line', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'road-segments-line', () => {
+      map.getCanvas().style.cursor = '';
+    });
+    map.on('click', 'road-segments-line', (e) => {
+      if (e.features?.length && onRoadClickRef.current) {
+        onRoadClickRef.current(e.features[0].properties as any);
+      }
+    });
+  }
+
+  function addRouteLayers(map: maplibregl.Map, routeList: RouteOption[]) {
+    routeList.forEach((route) => {
       const sourceId = `route-source-${route.id}`;
       const layerId = `route-layer-${route.id}`;
+      if (map.getSource(sourceId)) return; // already added
 
-      if (map.getSource(sourceId)) {
-        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData({
+      const isSelected = selectedRouteId === route.id;
+
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: {
           type: 'Feature',
           properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: route.coordinates,
-          },
-        });
-      } else {
-        map.addSource(sourceId, {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'LineString',
-              coordinates: route.coordinates,
-            },
-          },
-        });
-
-        map.addLayer({
-          id: layerId,
-          type: 'line',
-          source: sourceId,
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint: {
-            'line-color':
-              selectedRouteId && route.id === selectedRouteId
-                ? '#06b6d4'
-                : route.isRecommended
-                ? '#06b6d4'
-                : route.congestionLevel === 'severe'
-                ? '#ef4444'
-                : '#f59e0b',
-            'line-width':
-              selectedRouteId && route.id === selectedRouteId
-                ? 7
-                : route.isRecommended
-                ? 5
-                : 3,
-            'line-opacity':
-              selectedRouteId
-                ? route.id === selectedRouteId
-                  ? 1.0
-                  : 0.35
-                : 0.85,
-          },
-        });
-      }
+          geometry: { type: 'LineString', coordinates: route.coordinates },
+        },
+      });
+      map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': isSelected ? '#06b6d4'
+            : route.isRecommended ? '#06b6d4'
+            : route.congestionLevel === 'severe' ? '#ef4444' : '#f59e0b',
+          'line-width': isSelected ? 7 : route.isRecommended ? 6 : 4,
+          'line-opacity': selectedRouteId ? (isSelected ? 1.0 : 0.35) : 0.85,
+        },
+      });
     });
+  }
 
-    // 2b. Route Origin / Destination Markers (only recreate if count changed)
-    if (routes.length > 0 && routeMarkersRef.current.length === 0) {
-      const firstRoute = routes[0];
-      if (firstRoute.coordinates && firstRoute.coordinates.length >= 2) {
-        const originEl = document.createElement('div');
-        originEl.className = 'w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
-        originEl.innerHTML = '<span class="text-[9px] font-bold text-white">A</span>';
-        const m1 = new maplibregl.Marker({ element: originEl })
-          .setLngLat(firstRoute.coordinates[0])
-          .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#10b981;'>Origin:</b> ${firstRoute.origin || 'Start'}`))
-          .addTo(map);
-        routeMarkersRef.current.push(m1);
+  function addJunctionMarkers(map: maplibregl.Map, junctionList: any[], city: string) {
+    // Remove old junction markers
+    mapContainerRef.current?.querySelectorAll('[data-marker="junction"]').forEach((el) => el.remove());
 
-        const destEl = document.createElement('div');
-        destEl.className = 'w-5 h-5 rounded-full bg-red-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
-        destEl.innerHTML = '<span class="text-[9px] font-bold text-white">B</span>';
-        const m2 = new maplibregl.Marker({ element: destEl })
-          .setLngLat(firstRoute.coordinates[firstRoute.coordinates.length - 1])
-          .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#ef4444;'>Destination:</b> ${firstRoute.destination || 'End'}`))
-          .addTo(map);
-        routeMarkersRef.current.push(m2);
-      }
-    } else if (routes.length === 0 && routeMarkersRef.current.length > 0) {
-      routeMarkersRef.current.forEach((m) => m.remove());
-      routeMarkersRef.current = [];
-    }
-
-    // 3. Render / Update Incidents Persistently
-    (incidents || []).forEach((inc) => {
-      if (!incidentMarkersRef.current.has(inc.id)) {
-        const el = document.createElement('div');
-        el.className =
-          'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
-        el.innerHTML = '⚠️';
-
-        const marker = new maplibregl.Marker(el)
-          .setLngLat([inc.lng, inc.lat])
-          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
-          .addTo(map);
-
-        incidentMarkersRef.current.set(inc.id, { marker, el });
-      }
-    });
-
-
-    // 4. Render / Update Camera Markers (Synthetic) — skipped for user route planner
-    if (!hideAdminOverlays) {
-    cameras.forEach((cam) => {
-      if (cameraMarkersRef.current.has(cam.id)) return;
+    junctionList.forEach((j: any) => {
       const el = document.createElement('div');
-      el.className = 'w-6 h-6 rounded-lg bg-blue-900/80 border-2 border-blue-400/60 flex items-center justify-center cursor-pointer shadow-md z-20 transition-transform hover:scale-125';
-      el.innerHTML = '📷';
-      el.title = cam.name;
+      el.dataset.marker = 'junction';
+      el.className =
+        'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 border-slate-900 shadow-lg';
 
-      const statusColor = cam.status === 'online' ? '#22c55e' : '#ef4444';
-      const popupHtml = `
-        <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-          <div style="font-size: 11px; font-weight: bold; color: #38bdf8;">${cam.name}</div>
-          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">
-            <div>Type: <strong style="color: #f8fafc;">${cam.type}</strong></div>
-            <div>Status: <strong style="color: ${statusColor};">${cam.status}</strong></div>
-          </div>
-        </div>
-      `;
-      const marker = new maplibregl.Marker(el)
-        .setLngLat([cam.lng, cam.lat])
-        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(popupHtml))
-        .addTo(map);
-      cameraMarkersRef.current.set(cam.id, { marker, el });
-    });
+      if (j.status === 'critical') { el.style.backgroundColor = '#ef4444'; el.style.boxShadow = '0 0 12px #ef4444'; }
+      else if (j.status === 'red') { el.style.backgroundColor = '#f97316'; }
+      else if (j.status === 'yellow') { el.style.backgroundColor = '#eab308'; }
+      else { el.style.backgroundColor = '#22c55e'; }
 
+      const inner = document.createElement('div');
+      inner.className = 'w-2 h-2 rounded-full bg-white';
+      el.appendChild(inner);
 
-    } // end cameras
-    // 5. Render / Update Sensor Markers (Synthetic) — skipped for user route planner
-    if (!hideAdminOverlays) {
-    sensors.forEach((sens) => {
-      if (sensorMarkersRef.current.has(sens.id)) return;
-      const el = document.createElement('div');
-      el.className = 'w-6 h-6 rounded-lg bg-purple-900/80 border-2 border-purple-400/60 flex items-center justify-center cursor-pointer shadow-md z-20 transition-transform hover:scale-125';
-      el.innerHTML = '📡';
-      el.title = sens.name;
+      el.addEventListener('click', () => onJunctionClickRef.current?.(j));
 
-      const statusColor = sens.status === 'active' ? '#22c55e' : '#ef4444';
-      const popupHtml = `
-        <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-          <div style="font-size: 11px; font-weight: bold; color: #a855f7;">${sens.name}</div>
-          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">
-            <div>Type: <strong style="color: #f8fafc;">${sens.type}</strong></div>
-            <div>Reading: <strong style="color: #f8fafc;">${sens.reading}</strong></div>
-            <div>Status: <strong style="color: ${statusColor};">${sens.status}</strong></div>
-          </div>
-        </div>
-      `;
-      const marker = new maplibregl.Marker(el)
-        .setLngLat([sens.lng, sens.lat])
-        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(popupHtml))
-        .addTo(map);
-      sensorMarkersRef.current.set(sens.id, { marker, el });
-    });
-
-
-    } // end sensors
-    // 6. Render / Update Bus Stop Markers (Synthetic Transit) — skipped for user route planner
-    if (!hideAdminOverlays) {
-    busStops.forEach((b) => {
-      if (busStopMarkersRef.current.has(b.id)) return;
-      const el = document.createElement('div');
-      el.className = 'w-6 h-6 rounded-lg bg-cyan-800/80 border-2 border-cyan-400/60 flex items-center justify-center cursor-pointer shadow-md z-20 transition-transform hover:scale-125';
-      el.innerHTML = '🚌';
-      el.title = b.name;
-
-      const popupHtml = `
-        <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-          <div style="font-size: 11px; font-weight: bold; color: #22d3ee;">${b.name}</div>
-          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">
-            <div>Routes: <strong style="color: #f8fafc;">${b.routes.join(', ')}</strong></div>
-          </div>
-        </div>
-      `;
-      const marker = new maplibregl.Marker(el)
-        .setLngLat([b.lng, b.lat])
-        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(popupHtml))
-        .addTo(map);
-      busStopMarkersRef.current.set(b.id, { marker, el });
-    });
-
-
-    } // end bus stops
-    // 7. Render / Update Metro Station Markers (Synthetic Transit) — skipped for user route planner
-    if (!hideAdminOverlays) {
-    metroStations.forEach((m) => {
-      if (metroMarkersRef.current.has(m.id)) return;
-      const el = document.createElement('div');
-      el.className = 'w-6 h-6 rounded-lg bg-emerald-800/80 border-2 border-emerald-400/60 flex items-center justify-center cursor-pointer shadow-md z-20 transition-transform hover:scale-125';
-      el.innerHTML = '🚇';
-      el.title = m.name;
-
-      const popupHtml = `
-        <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-          <div style="font-size: 11px; font-weight: bold; color: #34d399;">${m.name}</div>
-          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">
-            <div>Line: <strong style="color: #f8fafc;">${m.line}</strong></div>
-          </div>
-        </div>
-      `;
-      const marker = new maplibregl.Marker(el)
-        .setLngLat([m.lng, m.lat])
-        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(popupHtml))
-        .addTo(map);
-      metroMarkersRef.current.set(m.id, { marker, el });
-    });
-
-
-    } // end metro stations
-    // 8. Render / Update Junction Markers PERSISTENTLY (No remove/recreate!) — skipped for user route planner
-    if (!hideAdminOverlays) {
-    const activeJunctions = (junctions && junctions.length > 0) ? junctions : cityConfig.junctions;
-    activeJunctions.forEach((j: any) => {
-      const statusColor =
-        j.status === 'critical' ? '#ef4444' :
-        j.status === 'red' ? '#f97316' :
-        j.status === 'yellow' ? '#eab308' : '#22c55e';
-
-      const popupHtml = `
+      const popupContent = `
         <div style="font-family: monospace; padding: 4px;">
           <h4 style="margin: 0; font-size: 13px; font-weight: bold; color: #38bdf8;">${j.name}</h4>
-          <p style="margin: 2px 0 0; font-size: 11px; color: #94a3b8;">Metro: ${selectedCity}</p>
+          <p style="margin: 2px 0 0; font-size: 11px; color: #94a3b8;">Metro: ${city}</p>
           <div style="margin-top: 6px; font-size: 11px; color: #f8fafc;">
             <div>Wait Time: <strong>${j.currentWaitTimeSec || j.waitTimeSec || 60}s</strong></div>
             <div>Queue Vehicles: <strong>${j.vehicleCount || j.queueLengthVeh || 300}</strong></div>
@@ -583,261 +500,485 @@ export const MapContainer: React.FC<MapProps> = ({
         </div>
       `;
 
-      const existing = junctionMarkersRef.current.get(j.id);
-      if (existing) {
-        existing.el.style.backgroundColor = statusColor;
-        existing.el.style.boxShadow = j.status === 'critical' ? '0 0 12px #ef4444' : 'none';
-        existing.popup.setHTML(popupHtml);
-      } else {
-        const el = document.createElement('div');
-        el.className =
-          'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-all border-2 border-slate-900 shadow-lg';
-        el.style.backgroundColor = statusColor;
-        if (j.status === 'critical') el.style.boxShadow = '0 0 12px #ef4444';
+      new maplibregl.Marker(el)
+        .setLngLat([j.lng, j.lat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
+        .addTo(map);
+    });
+  }
 
-        const inner = document.createElement('div');
-        inner.className = 'w-2 h-2 rounded-full bg-white';
-        el.appendChild(inner);
+  function addGreenCorridorLayers(map: maplibregl.Map, corridors: GreenCorridor[]) {
+    // Remove existing green corridor layers
+    ['green-corridor-bg', 'green-corridor-line', 'green-corridor-glow', 'green-corridor-vehicle'].forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    });
+    if (map.getSource('green-corridor-src')) map.removeSource('green-corridor-src');
 
-        el.addEventListener('click', () => {
-          if (onJunctionClick) onJunctionClick(j);
-        });
+    if (corridors.length === 0) return;
 
-        const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
-        const marker = new maplibregl.Marker(el)
-          .setLngLat([j.lng, j.lat])
-          .setPopup(popup)
-          .addTo(map);
+    // Build a combined GeoJSON for all active corridors
+    const features = corridors
+      .filter(c => c.status === 'active' && c.coordinates && c.coordinates.length > 1)
+      .map(c => ({
+        type: 'Feature' as const,
+        properties: {
+          id: c.id,
+          title: c.title,
+          vehicleType: c.vehicleType,
+          callsign: c.vehicleCallsign,
+          etaMin: c.etaMin,
+          status: c.status,
+          currentLat: c.currentLat,
+          currentLng: c.currentLng,
+        },
+        geometry: {
+          type: 'LineString' as const,
+          coordinates: c.coordinates,
+        },
+      }));
 
-        junctionMarkersRef.current.set(j.id, { marker, el, popup });
-      }
+    if (features.length === 0) return;
+
+    map.addSource('green-corridor-src', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features } as any,
     });
 
-    } // end junctions
-    // 9. Render / Update Ambulances & Emergency Priority Vehicles — skipped for user route planner
-    if (!hideAdminOverlays) {
-    (cityConfig.vehicles || [])
-      .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
-      .forEach((v) => {
-        const popupHtml = `
-          <div style="font-family: monospace; padding: 4px; min-width: 200px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
-              <span style="font-size: 11px; font-weight: bold; color: #ef4444; text-transform: uppercase;">🚑 Emergency Ambulance</span>
-              <span style="font-size: 9px; background: rgba(239,68,68,0.2); color: #f87171; padding: 2px 4px; border-radius: 4px;">PRIORITY</span>
-            </div>
-            <h4 style="margin: 0; font-size: 12px; font-weight: bold; color: #f8fafc;">${v.name}</h4>
-            <div style="margin-top: 6px; font-size: 10px; color: #94a3b8; line-height: 1.4;">
-              <div>Speed: <strong style="color: #38bdf8;">${v.speedKmh} km/h</strong></div>
-              <div>Destination: <strong style="color: #f8fafc;">${v.destination}</strong></div>
-              <div>ETA: <strong style="color: #4ade80;">${v.etaMin || 8} mins</strong></div>
-              <div style="margin-top: 4px; color: #a7f3d0; background: rgba(16,185,129,0.15); padding: 3px; border-radius: 4px; font-weight: bold;">
-                ${v.detail || 'Green Corridor Active'}
-              </div>
-            </div>
-          </div>
-        `;
+    // Wide green glow underneath
+    map.addLayer({
+      id: 'green-corridor-bg',
+      type: 'line',
+      source: 'green-corridor-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#22c55e',
+        'line-width': 14,
+        'line-opacity': 0.15,
+        'line-blur': 8,
+      },
+    });
 
-        const existing = vehicleMarkersRef.current.get(v.id);
-        if (existing) {
-          existing.marker.setLngLat([v.lng, v.lat]);
-          existing.popup.setHTML(popupHtml);
-        } else {
-          const el = document.createElement('div');
-          el.className =
-            'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
-          el.style.boxShadow = '0 0 16px #ef4444';
-          el.innerHTML = `
-            <span class="text-sm">🚑</span>
-            <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
-          `;
+    // Animated dashed green line
+    map.addLayer({
+      id: 'green-corridor-line',
+      type: 'line',
+      source: 'green-corridor-src',
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round',
+      },
+      paint: {
+        'line-color': '#4ade80',
+        'line-width': 5,
+        'line-opacity': 0.95,
+        'line-dasharray': [0, 4, 3],
+      },
+    });
 
-          const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
-          const marker = new maplibregl.Marker(el)
-            .setLngLat([v.lng, v.lat])
-            .setPopup(popup)
-            .addTo(map);
+    // Bright glow overlay
+    map.addLayer({
+      id: 'green-corridor-glow',
+      type: 'line',
+      source: 'green-corridor-src',
+      paint: {
+        'line-color': '#86efac',
+        'line-width': 3,
+        'line-opacity': 0.5,
+        'line-blur': 3,
+      },
+    });
 
-          vehicleMarkersRef.current.set(v.id, { marker, el, popup });
-        }
-      });
+    // Vehicle position dots
+    map.addLayer({
+      id: 'green-corridor-vehicle',
+      type: 'circle',
+      source: 'green-corridor-src',
+      paint: {
+        'circle-radius': [
+          'interpolate', ['linear'], ['zoom'],
+          10, 5, 15, 10,
+        ],
+        'circle-color': '#22c55e',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-blur': 0.15,
+      },
+    });
 
-    } // end emergency vehicles
-    // 10. Render / Update Buses, Heavy Freight & Clusters — skipped for user route planner
-    if (!hideAdminOverlays) {
-    (cityConfig.vehicles || [])
-      .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
-      .forEach((v) => {
-        const popupHtml = `
-          <div style="font-family: monospace; padding: 4px; min-width: 180px;">
-            <h4 style="margin: 0; font-size: 11px; font-weight: bold; color: #38bdf8;">${v.name}</h4>
-            <div style="margin-top: 4px; font-size: 10px; color: #94a3b8;">
-              <div>Speed: <strong>${v.speedKmh} km/h</strong></div>
-              <div>Corridor: <strong>${v.destination}</strong></div>
-              <div style="color: #cbd5e1; margin-top: 2px;">${v.detail}</div>
-            </div>
-          </div>
-        `;
+    // Animate the dashes by updating the dasharray periodically
+    let dashStep = 0;
+    let animFrameId: number | null = null;
+    const animateDash = () => {
+      if (!map || !map.getLayer('green-corridor-line')) return;
+      dashStep = (dashStep + 0.15) % 12;
+      try {
+        map.setPaintProperty('green-corridor-line', 'line-dasharray', [
+          dashStep, 4, 3 - (dashStep % 3) + 1
+        ]);
+      } catch { /* map may have been removed */ }
+      animFrameId = requestAnimationFrame(animateDash);
+    };
+    animFrameId = requestAnimationFrame(animateDash);
+    // Cleanup animation when corridor layers are removed
+    const onRemove = () => { if (animFrameId) cancelAnimationFrame(animFrameId); };
+    map.once('remove', onRemove);
+  }
 
-        const existing = vehicleMarkersRef.current.get(v.id);
-        if (existing) {
-          existing.marker.setLngLat([v.lng, v.lat]);
-          existing.popup.setHTML(popupHtml);
-        } else {
-          const el = document.createElement('div');
-          if (v.type === 'city_bus') {
-            el.className =
-              'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-            el.innerHTML = '🚌';
-          } else if (v.type === 'heavy_freight') {
-            el.className =
-              'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-            el.innerHTML = '🚛';
-          } else {
-            el.className =
-              'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
-            el.innerHTML = '🚘';
-          }
+  function addIncidentMarkers(map: maplibregl.Map, incList: Incident[]) {
+    mapContainerRef.current?.querySelectorAll('[data-marker="incident"]').forEach((el) => el.remove());
 
-          const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
-          const marker = new maplibregl.Marker(el)
-            .setLngLat([v.lng, v.lat])
-            .setPopup(popup)
-            .addTo(map);
+    incList.forEach((inc) => {
+      const el = document.createElement('div');
+      el.dataset.marker = 'incident';
+      el.className =
+        'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
+      el.innerHTML = '⚠️';
 
-          vehicleMarkersRef.current.set(v.id, { marker, el, popup });
-        }
-      });
-    } // end buses/freight/clusters
-  };
+      new maplibregl.Marker(el)
+        .setLngLat([inc.lng, inc.lat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
+        .addTo(map);
+    });
+  }
 
-  // 2. Reactively update map data whenever props or layer toggles change (WITHOUT destroying map canvas!)
+  function addSyntheticMarkers(map: maplibregl.Map) {
+    cameras.forEach((cam) => {
+      if (cameraMarkersRef.current.has(cam.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'camera';
+      el.className = 'w-5 h-5 rounded bg-blue-900/80 border border-blue-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '📷';
+      el.title = cam.name;
+      new maplibregl.Marker(el)
+        .setLngLat([cam.lng, cam.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#38bdf8;'>${cam.name}</b><br/>Type: ${cam.type}<br/>Status: ${cam.status}`))
+        .addTo(map);
+      cameraMarkersRef.current.set(cam.id, { marker: null as any, el });
+    });
+    sensors.forEach((sens) => {
+      if (sensorMarkersRef.current.has(sens.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'sensor';
+      el.className = 'w-5 h-5 rounded bg-purple-900/80 border border-purple-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '📡';
+      el.title = sens.name;
+      new maplibregl.Marker(el)
+        .setLngLat([sens.lng, sens.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#a855f7;'>${sens.name}</b><br/>Type: ${sens.type}<br/>Reading: ${sens.reading}`))
+        .addTo(map);
+      sensorMarkersRef.current.set(sens.id, { marker: null as any, el });
+    });
+    busStops.forEach((b) => {
+      if (busStopMarkersRef.current.has(b.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'busstop';
+      el.className = 'w-5 h-5 rounded bg-cyan-800/80 border border-cyan-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '🚌';
+      new maplibregl.Marker(el)
+        .setLngLat([b.lng, b.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#22d3ee;'>${b.name}</b><br/>Routes: ${b.routes.join(', ')}`))
+        .addTo(map);
+      busStopMarkersRef.current.set(b.id, { marker: null as any, el });
+    });
+    metroStations.forEach((m) => {
+      if (metroMarkersRef.current.has(m.id)) return;
+      const el = document.createElement('div');
+      el.dataset.marker = 'metro';
+      el.className = 'w-5 h-5 rounded bg-emerald-800/80 border border-emerald-400/60 flex items-center justify-center cursor-pointer text-[10px]';
+      el.innerHTML = '🚇';
+      new maplibregl.Marker(el)
+        .setLngLat([m.lng, m.lat])
+        .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`<b style='color:#34d399;'>${m.name}</b><br/>Line: ${m.line}`))
+        .addTo(map);
+      metroMarkersRef.current.set(m.id, { marker: null as any, el });
+    });
+  }
+
+  // Update synthetic markers (cameras, sensors, bus stops, metro)
   useEffect(() => {
-    if (mapRef.current && isMapLoadedRef.current) {
-      updateMapData(mapRef.current);
-    }
-  }, [junctions, incidents, digitalTwinNodes, routes, roadGeoJSON, selectedRouteId, cameras, sensors, busStops, metroStations]);
-
-  // 3. Auto-fit map bounds to selected route (user route planner mode)
-  useEffect(() => {
-    if (!mapRef.current || !isMapLoadedRef.current || !hideAdminOverlays) return;
-    if (!routes || routes.length === 0) return;
-
-    const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes[0];
-    if (!routeToFit || !routeToFit.coordinates || routeToFit.coordinates.length < 2) return;
-
-    const coords = routeToFit.coordinates;
-    const bounds = coords.reduce(
-      (b, coord) => b.extend(coord as maplibregl.LngLatLike),
-      new maplibregl.LngLatBounds(coords[0] as maplibregl.LngLatLike, coords[0] as maplibregl.LngLatLike),
-    );
-
-    mapRef.current.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 }, maxZoom: 14, duration: 800 });
-  }, [routes, selectedRouteId, hideAdminOverlays]);
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    addSyntheticMarkers(map);
+  }, [cameras, sensors, busStops, metroStations]);
 
   return (
     <div className="relative w-full h-full min-h-[380px] rounded-xl overflow-hidden border border-slate-800 shadow-xl bg-slate-950 flex flex-col">
       {/* Top Map Header Control Bar: 4-City Tabs + Search + Toggles + Style Menu */}
       <div className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0">
-        {/* 1. 4-City Selector Tabs */}
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
-          <span className="text-[10px] font-mono text-cyan-400 px-2 font-bold flex items-center gap-1 hidden sm:flex">
-            <Globe className="w-3 h-3" />
-            CITY:
-          </span>
-          {Object.keys(CITIES).map((cityName) => (
-            <button
-              key={cityName}
-              onClick={() => handleCitySelect(cityName)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-bold font-mono transition-all ${
-                selectedCity === cityName
-                  ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              {cityName}
-            </button>
-          ))}
-        </div>
-
-        {/* 2. City-Scoped Location Search Bar */}
-        <div className="relative flex-1 max-w-xs">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Search in ${selectedCity}...`}
-              className="w-full pl-8 pr-7 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
-            />
-            {searchQuery && (
+        {/* When search is focused: full-width search bar. Otherwise: normal layout */}
+        {showSuggestions ? (
+          /* ── EXPANDED SEARCH MODE ── */
+          <div className="relative flex-1 w-full">
+            <div className="flex items-center gap-2 w-full">
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                onClick={() => { setShowSuggestions(false); setSearchQuery(''); setSearchResults([]); }}
+                className="shrink-0 p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white transition-all"
               >
-                <X className="w-3 h-3" />
+                <X className="w-4 h-4" />
               </button>
-            )}
-          </div>
-
-          {/* Search Dropdown Results */}
-          {searchResults.length > 0 && (
-            <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-30 max-h-48 overflow-y-auto font-mono text-xs">
-              {searchResults.map((res) => (
-                <div
-                  key={res.place_id}
-                  onClick={() => handleSelectSearchResult(res)}
-                  className="p-2 hover:bg-cyan-500/20 cursor-pointer border-b border-slate-800/60 text-slate-200 flex items-start gap-2 text-[11px]"
-                >
-                  <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0 mt-0.5" />
-                  <span className="line-clamp-2">{res.display_name}</span>
-                </div>
-              ))}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-cyan-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setShowSuggestions(true); }}
+                  placeholder={`Search any place in ${selectedCity}...`}
+                  className="w-full pl-10 pr-8 py-2 bg-slate-950 border border-cyan-500/50 rounded-lg text-sm font-mono text-slate-100 focus:outline-none focus:border-cyan-400 shadow-lg shadow-cyan-500/10"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* Map Style Selector Dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setShowStyleMenu(!showStyleMenu)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
-          >
-            <Layers className="w-3 h-3 text-cyan-400" />
-            <span>{MAP_STYLES[currentStyle].icon}</span>
-          </button>
+            {/* Dropdown below the search bar */}
+            <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-40 max-h-72 overflow-y-auto font-mono text-xs">
+              {searchResults.length > 0 ? (
+                /* Search Results */
+                <>
+                  <div className="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>{searchResults.length} Results</span>
+                    <span className="text-cyan-500">{selectedCity}</span>
+                  </div>
+                  {searchResults.map((res) => (
+                    <div
+                      key={res.place_id}
+                      onClick={() => { handleSelectSearchResult(res); setShowSuggestions(false); }}
+                      className="px-3 py-2.5 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-start gap-3 transition-colors"
+                    >
+                      <div className="shrink-0 mt-0.5">
+                        {res.source === 'local' ? (
+                          <div className="w-6 h-6 rounded-md bg-cyan-500/20 flex items-center justify-center">
+                            <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                          </div>
+                        ) : (
+                          <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                            <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 font-medium truncate">{res.display_name.split(',')[0]}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{res.display_name.split(',').slice(1, 3).join(',')}</div>
+                      </div>
+                      {res.source === 'local' && (
+                        <span className="shrink-0 text-[8px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded mt-0.5">LOCAL</span>
+                      )}
+                    </div>
+                  ))}
+                </>
+              ) : (
+                /* Popular Areas when no query */
+                <>
+                  <div className="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800/60 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                    Popular in {selectedCity}
+                  </div>
+                  {mapSearchService.getPopularAreas(selectedCity).slice(0, 6).map((area) => (
+                    <div
+                      key={area.name}
+                      onClick={() => { setSearchQuery(area.name); setShowSuggestions(true); }}
+                      className="px-3 py-2.5 hover:bg-cyan-500/15 cursor-pointer border-b border-slate-800/40 text-slate-200 flex items-center gap-3 transition-colors"
+                    >
+                      <div className="w-6 h-6 rounded-md bg-cyan-500/20 flex items-center justify-center shrink-0">
+                        <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 font-medium truncate">{area.name}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{area.description}</div>
+                      </div>
+                      <span className="shrink-0 text-[8px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                        {area.category}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* ── NORMAL MODE: City + Areas + Compact Search + Controls ── */
+          <>
+            {/* 1. City Switcher */}
+            <div className="relative">
+              <button
+                onClick={() => setShowCityMenu(!showCityMenu)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-cyan-300 hover:text-cyan-200 hover:border-cyan-500/40 transition-all"
+              >
+                <Globe className="w-3 h-3 text-cyan-400" />
+                <span>{selectedCity}</span>
+                <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${showCityMenu ? 'rotate-180' : ''}`} />
+              </button>
+              {showCityMenu && (
+                <div className="absolute left-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 w-44 font-mono text-xs space-y-0.5">
+                  <div className="text-[9px] text-slate-500 font-bold px-2 py-1 uppercase">Switch Metro</div>
+                  {Object.keys(CITIES).map((cityName) => {
+                    const city = CITIES[cityName];
+                    const worstArea = city.areas?.reduce((w, a) => a.congestion > w.congestion ? a : w, city.areas[0]);
+                    return (
+                      <button
+                        key={cityName}
+                        onClick={() => handleCitySelect(cityName)}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                          selectedCity === cityName
+                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>{cityName}</span>
+                        {worstArea && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                            worstArea.congestion > 85 ? 'bg-red-500/20 text-red-400' :
+                            worstArea.congestion > 60 ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-emerald-500/20 text-emerald-400'
+                          }`}>{worstArea.congestion}%</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
-          {showStyleMenu && (
-            <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
-              <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
-              {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
+            {/* 2. Area Tabs */}
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-mono text-cyan-400 px-2 font-bold flex items-center gap-1 hidden sm:flex">
+                <Zap className="w-3 h-3" />
+                AREAS:
+              </span>
+              {cityConfig.areas.map((area) => (
                 <button
-                  key={styleKey}
-                  onClick={() => {
-                    setCurrentStyle(styleKey);
-                    setShowStyleMenu(false);
-                  }}
-                  className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
-                    currentStyle === styleKey
-                      ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                  }`}
+                  key={area.name}
+                  onClick={() => handleAreaSelect(area)}
+                  className="group flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold font-mono transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
                 >
-                  <span>{MAP_STYLES[styleKey].name}</span>
-                  <span>{MAP_STYLES[styleKey].icon}</span>
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    area.congestion > 85 ? 'bg-red-500 shadow-sm shadow-red-500/50' :
+                    area.congestion > 60 ? 'bg-amber-400' :
+                    area.congestion > 35 ? 'bg-yellow-400' :
+                    'bg-emerald-400'
+                  }`} />
+                  <span>{area.name}</span>
                 </button>
               ))}
             </div>
-          )}
-        </div>
 
+            {/* 3. Compact Search Trigger */}
+            <button
+              onClick={() => setShowSuggestions(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Search</span>
+            </button>
+
+            {/* 4. Controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowTrafficLayer(!showTrafficLayer)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+                  showTrafficLayer
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
+                <span className="hidden md:inline">Traffic Layer</span>
+              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowStyleMenu(!showStyleMenu)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
+                >
+                  <Layers className="w-3 h-3 text-cyan-400" />
+                  <span>{MAP_STYLES[currentStyle].icon}</span>
+                </button>
+                {showStyleMenu && (
+                  <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
+                    <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
+                    {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
+                      <button
+                        key={styleKey}
+                        onClick={() => { setCurrentStyle(styleKey); setShowStyleMenu(false); }}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                          currentStyle === styleKey
+                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>{MAP_STYLES[styleKey].name}</span>
+                        <span>{MAP_STYLES[styleKey].icon}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Close suggestions / city menu on outside click */}
+      {(showSuggestions || showCityMenu) && (
+        <div className="absolute inset-0 z-5" onClick={() => { setShowSuggestions(false); setShowCityMenu(false); }} />
+      )}
 
       {/* Main Map Container Canvas */}
       <div className="flex-1 relative">
         <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
+        {/* Legend Overlay */}
+        {/* Traffic Legend */}
+        <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1 z-10 shadow-lg font-mono">
+          <div className="font-bold text-slate-400 text-[10px] uppercase flex items-center justify-between gap-4">
+            <span>{selectedCity} Live Network</span>
+            <span className="text-cyan-400 text-[9px]">MapLibre Active</span>
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
+            <span>Clear Flow (&gt;40 km/h)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
+            <span>Slow Traffic (20-40 km/h)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-1 bg-red-500 inline-block rounded" />
+            <span>Heavy Gridlock (&lt;20 km/h)</span>
+          </div>
+          {greenCorridors.some(c => c.status === 'active') && (
+            <>
+              <div className="border-t border-slate-700/60 mt-1 pt-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-1 bg-green-400 inline-block rounded animate-pulse" style={{ backgroundImage: 'repeating-linear-gradient(90deg, #4ade80 0px, #4ade80 4px, transparent 4px, transparent 7px)' }} />
+                  <span className="text-green-400 font-bold">Green Corridor</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-green-500 rounded-full border border-white shadow-sm" />
+                  <span className="text-[10px] text-slate-400">Emergency Vehicle</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
 
+        {/* Green Corridor Alert Banner */}
+        {greenCorridors.some(c => c.status === 'active') && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-green-900/90 backdrop-blur-md px-4 py-2 rounded-lg border border-green-500/50 z-10 shadow-lg shadow-green-500/20 animate-pulse">
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="text-green-400 font-bold">🟢 GREEN CORRIDOR ACTIVE</span>
+              <span className="text-green-300">—</span>
+              <span className="text-green-200">
+                {greenCorridors.filter(c => c.status === 'active').map(c => `${c.title} (ETA ${c.etaMin}min)`).join(' | ')}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

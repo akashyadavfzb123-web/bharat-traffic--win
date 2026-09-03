@@ -1,9 +1,21 @@
+export interface CityArea {
+  name: string;
+  lat: number;
+  lng: number;
+  /** 0-100 congestion score */
+  congestion: number;
+  /** Human-readable traffic label */
+  trafficStatus: 'Gridlock' | 'Heavy' | 'Slow' | 'Clear';
+}
+
 export interface CityConfig {
   id: string;
   name: string;
   state: string;
   center: [number, number]; // [lng, lat]
   zoom: number;
+  /** Key neighborhoods / heavy-traffic zones shown above the map */
+  areas: CityArea[];
   defaultOrigin: string;
   defaultDestination: string;
   routes: Array<{
@@ -68,6 +80,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Karnataka',
     center: [77.5946, 12.9716],
     zoom: 12,
+    areas: [
+      { name: 'Silk Board Junction', lat: 12.9170, lng: 77.6229, congestion: 94, trafficStatus: 'Gridlock' },
+      { name: 'Marathahalli Bridge', lat: 12.9352, lng: 77.6967, congestion: 82, trafficStatus: 'Heavy' },
+      { name: 'Electronic City Phase 1', lat: 12.8399, lng: 77.6770, congestion: 68, trafficStatus: 'Heavy' },
+      { name: 'MG Road', lat: 12.9758, lng: 77.6065, congestion: 45, trafficStatus: 'Slow' },
+      { name: 'Koramangala', lat: 12.9352, lng: 77.6245, congestion: 35, trafficStatus: 'Clear' },
+    ],
     defaultOrigin: 'Koramangala 5th Block, Bengaluru',
     defaultDestination: 'Whitefield ITPL, Bengaluru',
     routes: [
@@ -211,6 +230,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Delhi / Haryana / UP',
     center: [77.2090, 28.6139],
     zoom: 11.5,
+    areas: [
+      { name: 'AIIMS Ring Road', lat: 28.5672, lng: 77.2102, congestion: 96, trafficStatus: 'Gridlock' },
+      { name: 'DND Flyway', lat: 28.5850, lng: 77.2890, congestion: 88, trafficStatus: 'Heavy' },
+      { name: 'Gurgaon IFFCO Chowk', lat: 28.4744, lng: 77.0783, congestion: 78, trafficStatus: 'Heavy' },
+      { name: 'Connaught Place', lat: 28.6315, lng: 77.2167, congestion: 55, trafficStatus: 'Slow' },
+      { name: 'Noida Sector 18', lat: 28.5700, lng: 77.3260, congestion: 38, trafficStatus: 'Clear' },
+    ],
     defaultOrigin: 'Connaught Place, New Delhi',
     defaultDestination: 'Gurgaon Cyber City, Delhi-NCR',
     routes: [
@@ -334,6 +360,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Maharashtra',
     center: [72.8777, 19.0760],
     zoom: 11.5,
+    areas: [
+      { name: 'Bandra-Worli Sea Link', lat: 19.0370, lng: 72.8200, congestion: 95, trafficStatus: 'Gridlock' },
+      { name: 'Dadar TT Circle', lat: 19.0176, lng: 72.8435, congestion: 85, trafficStatus: 'Heavy' },
+      { name: 'Andheri Signal', lat: 19.1197, lng: 72.8464, congestion: 72, trafficStatus: 'Heavy' },
+      { name: 'BKC Junction', lat: 19.0607, lng: 72.8696, congestion: 50, trafficStatus: 'Slow' },
+      { name: 'Marine Drive', lat: 18.9432, lng: 72.8234, congestion: 28, trafficStatus: 'Clear' },
+    ],
     defaultOrigin: 'Bandra Kurla Complex (BKC), Mumbai',
     defaultDestination: 'Chhatrapati Shivaji Airport, Mumbai',
     routes: [
@@ -445,6 +478,13 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Telangana',
     center: [78.4867, 17.3850],
     zoom: 12,
+    areas: [
+      { name: 'HITECH City', lat: 17.4435, lng: 78.3772, congestion: 91, trafficStatus: 'Gridlock' },
+      { name: 'Mehdipatnam', lat: 17.3889, lng: 78.4386, congestion: 79, trafficStatus: 'Heavy' },
+      { name: 'Ameerpet Junction', lat: 17.4156, lng: 78.4347, congestion: 66, trafficStatus: 'Slow' },
+      { name: 'Secunderabad Station', lat: 17.4399, lng: 78.5010, congestion: 48, trafficStatus: 'Slow' },
+      { name: 'Charminar', lat: 17.3616, lng: 78.4747, congestion: 32, trafficStatus: 'Clear' },
+    ],
     defaultOrigin: 'HITECH City Cyber Towers, Hyderabad',
     defaultDestination: 'Begumpet Airport Plaza, Hyderabad',
     routes: [

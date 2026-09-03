@@ -7,6 +7,7 @@ import { useApp } from '../../context/AppContext';
 import { getSyntheticTrafficData } from '../../services/syntheticTrafficProvider';
 import type { SyntheticTrafficData } from '../../types/synthetic';
 import { MapContainer } from '../../components/common/MapContainer';
+import { MOCK_EMERGENCY_CORRIDORS, corridorsToMapFormat } from '../../mock/mockEmergency';
 import { Link } from 'react-router-dom';
 import {
   Map,
@@ -36,6 +37,7 @@ export const AdminLiveTraffic: React.FC = () => {
   const [filterMode, setFilterMode] = useState<'all' | 'critical' | 'adaptive'>('all');
   const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
+  const [greenCorridors] = useState(corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS));
 
   const synthData: SyntheticTrafficData = useMemo(
     () => getSyntheticTrafficData(selectedCity),
@@ -257,6 +259,7 @@ export const AdminLiveTraffic: React.FC = () => {
               sensors={synthData.sensors}
               busStops={synthData.busStops}
               metroStations={synthData.metroStations}
+              greenCorridors={greenCorridors}
               onRoadClick={handleRoadClick}
               onJunctionClick={handleJunctionClick}
               selectedRoadId={selectedTarget?.type === 'road' ? selectedTarget.data.id : null}

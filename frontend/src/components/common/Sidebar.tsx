@@ -1,6 +1,5 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { useRealtime } from '../../context/RealtimeContext';
 import type { AdminModule } from '../../routes/adminRoutes';
@@ -97,7 +96,7 @@ const USER_ITEMS: SidebarItem[] = [
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ onItemClick }) => {
-  const { role } = useApp();
+  const { role } = useAuth();
   const { user, isAuthenticated } = useAuth();
   const { isRunning, snapshot } = useRealtime();
 
