@@ -67,7 +67,11 @@ export function useWebSocket() {
   // Get WebSocket URL
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('bharat_traffic_token');
-    const base = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_API_WS_URL || 'ws://localhost:8000';
+    const base = (
+      import.meta.env.VITE_WEBSOCKET_URL ||
+      import.meta.env.VITE_API_WS_URL ||
+      'ws://localhost:8000'
+    ).replace(/\/ws\/?$/, ''); // strip trailing /ws to avoid /ws/ws/ duplication
     return `${base}/ws/traffic?token=${token || ''}`;
   }, []);
 

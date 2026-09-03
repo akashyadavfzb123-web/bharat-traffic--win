@@ -35,7 +35,7 @@ type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets';
 const MAP_STYLES: Record<MapStyleType, { name: string; url: string; icon: string }> = {
   dark: {
     name: 'Command Dark',
-    url: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
     icon: '🌙',
   },
   satellite: {
@@ -142,7 +142,7 @@ export const MapContainer: React.FC<MapProps> = ({
             type: 'raster',
             tiles: [activeTileUrl],
             tileSize: 256,
-            attribution: '&copy; OpenStreetMap &copy; CARTO',
+            attribution: '&copy; OpenStreetMap &copy; Esri',
           },
         },
         layers: [
