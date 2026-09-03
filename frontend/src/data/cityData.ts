@@ -4,6 +4,21 @@ export interface CityConfig {
   state: string;
   center: [number, number]; // [lng, lat]
   zoom: number;
+  defaultOrigin: string;
+  defaultDestination: string;
+  routes: Array<{
+    id: string;
+    name: string;
+    summary: string;
+    distanceKm: number;
+    durationMin: number;
+    standardDurationMin: number;
+    timeSavedMin: number;
+    co2Kg: number;
+    congestionLevel: 'clear' | 'moderate' | 'severe';
+    isRecommended: boolean;
+    coordinates: [number, number][];
+  }>;
   junctions: Array<{
     id: string;
     name: string;
@@ -41,6 +56,49 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Karnataka',
     center: [77.5946, 12.9716],
     zoom: 12,
+    defaultOrigin: 'Koramangala 5th Block, Bengaluru',
+    defaultDestination: 'Whitefield ITPL, Bengaluru',
+    routes: [
+      {
+        id: 'blr-route-1',
+        name: 'Smart Dynamic Bypass (AI Recommended)',
+        summary: 'Via Inner Ring Rd → Old Airport Rd → Varthur Main Rd',
+        distanceKm: 18.4,
+        durationMin: 38,
+        standardDurationMin: 55,
+        timeSavedMin: 17,
+        co2Kg: 2.1,
+        congestionLevel: 'clear',
+        isRecommended: true,
+        coordinates: [
+          [77.6228, 12.9348],
+          [77.635, 12.945],
+          [77.65, 12.955],
+          [77.68, 12.965],
+          [77.72, 12.985],
+          [77.74, 12.986],
+        ],
+      },
+      {
+        id: 'blr-route-2',
+        name: 'Direct Outer Ring Road Corridor',
+        summary: 'Via Agara Junction → Bellandur EcoSpace Flyover',
+        distanceKm: 19.8,
+        durationMin: 58,
+        standardDurationMin: 58,
+        timeSavedMin: 0,
+        co2Kg: 3.4,
+        congestionLevel: 'severe',
+        isRecommended: false,
+        coordinates: [
+          [77.6228, 12.9172],
+          [77.6408, 12.922],
+          [77.66, 12.924],
+          [77.6762, 12.9262],
+          [77.7011, 12.9569],
+        ],
+      },
+    ],
     junctions: [
       { id: 'blr-1', name: 'Silk Board Junction', lat: 12.9172, lng: 77.6228, status: 'critical', waitTimeSec: 226, queueLengthVeh: 1466, congestionPct: 94 },
       { id: 'blr-2', name: 'Dairy Circle Flyover', lat: 12.9348, lng: 77.605, status: 'red', waitTimeSec: 126, queueLengthVeh: 886, congestionPct: 79 },
@@ -82,6 +140,47 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Delhi / Haryana / UP',
     center: [77.2090, 28.6139],
     zoom: 11.5,
+    defaultOrigin: 'Connaught Place, New Delhi',
+    defaultDestination: 'Gurgaon Cyber City, Delhi-NCR',
+    routes: [
+      {
+        id: 'del-route-1',
+        name: 'Vasant Kunj AI Express Route (AI Recommended)',
+        summary: 'Via Nelson Mandela Marg → Mehrauli-Gurgaon Rd Bypass',
+        distanceKm: 24.2,
+        durationMin: 42,
+        standardDurationMin: 68,
+        timeSavedMin: 26,
+        co2Kg: 2.8,
+        congestionLevel: 'clear',
+        isRecommended: true,
+        coordinates: [
+          [77.2167, 28.6315],
+          [77.2100, 28.5672],
+          [77.1550, 28.5250],
+          [77.0850, 28.4900],
+          [77.0725, 28.4721],
+        ],
+      },
+      {
+        id: 'del-route-2',
+        name: 'NH-48 Main Expressway Corridor',
+        summary: 'Via Dhaula Kuan Interchange → Gurgaon Toll Plaza',
+        distanceKm: 26.5,
+        durationMin: 68,
+        standardDurationMin: 68,
+        timeSavedMin: 0,
+        co2Kg: 4.2,
+        congestionLevel: 'severe',
+        isRecommended: false,
+        coordinates: [
+          [77.2167, 28.6315],
+          [77.1650, 28.5920],
+          [77.1250, 28.5400],
+          [77.0725, 28.4721],
+        ],
+      },
+    ],
     junctions: [
       { id: 'del-1', name: 'Connaught Place Outer Circle', lat: 28.6315, lng: 77.2167, status: 'yellow', waitTimeSec: 85, queueLengthVeh: 620, congestionPct: 65 },
       { id: 'del-2', name: 'DND Flyway Toll Plaza', lat: 28.5684, lng: 77.2796, status: 'critical', waitTimeSec: 210, queueLengthVeh: 1850, congestionPct: 92 },
@@ -117,6 +216,46 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Maharashtra',
     center: [72.8777, 19.0760],
     zoom: 11.5,
+    defaultOrigin: 'Bandra Kurla Complex (BKC), Mumbai',
+    defaultDestination: 'Chhatrapati Shivaji Airport, Mumbai',
+    routes: [
+      {
+        id: 'bom-route-1',
+        name: 'SANTACRUZ-CHEMBUR LINK ROAD (AI Recommended)',
+        summary: 'Via BKC Connector → SCLR Flyover → Airport T2 Skywalk',
+        distanceKm: 12.8,
+        durationMin: 24,
+        standardDurationMin: 48,
+        timeSavedMin: 24,
+        co2Kg: 1.5,
+        congestionLevel: 'clear',
+        isRecommended: true,
+        coordinates: [
+          [72.8530, 19.0600],
+          [72.8700, 19.0750],
+          [72.8800, 19.0880],
+          [72.8650, 19.0950],
+          [72.8464, 19.1197],
+        ],
+      },
+      {
+        id: 'bom-route-2',
+        name: 'Western Express Highway Arterial',
+        summary: 'Via Kalanagar Junction → Sion-Bandra Link Rd',
+        distanceKm: 15.1,
+        durationMin: 48,
+        standardDurationMin: 48,
+        timeSavedMin: 0,
+        co2Kg: 2.9,
+        congestionLevel: 'severe',
+        isRecommended: false,
+        coordinates: [
+          [72.8530, 19.0600],
+          [72.8500, 19.0900],
+          [72.8464, 19.1197],
+        ],
+      },
+    ],
     junctions: [
       { id: 'bom-1', name: 'Bandra-Worli Sea Link Toll', lat: 19.0330, lng: 72.8170, status: 'critical', waitTimeSec: 250, queueLengthVeh: 2100, congestionPct: 95 },
       { id: 'bom-2', name: 'BKC Kalanagar Junction', lat: 19.0600, lng: 72.8530, status: 'red', waitTimeSec: 180, queueLengthVeh: 1420, congestionPct: 87 },
@@ -152,6 +291,47 @@ export const CITIES: Record<string, CityConfig> = {
     state: 'Telangana',
     center: [78.4867, 17.3850],
     zoom: 12,
+    defaultOrigin: 'HITECH City Cyber Towers, Hyderabad',
+    defaultDestination: 'Begumpet Airport Plaza, Hyderabad',
+    routes: [
+      {
+        id: 'hyd-route-1',
+        name: 'Durgam Cheruvu Cable Bridge Express (AI Recommended)',
+        summary: 'Via Cable Bridge → Jubilee Hills Road No 36 → Begumpet',
+        distanceKm: 14.5,
+        durationMin: 28,
+        standardDurationMin: 52,
+        timeSavedMin: 24,
+        co2Kg: 1.8,
+        congestionLevel: 'clear',
+        isRecommended: true,
+        coordinates: [
+          [78.3808, 17.4504],
+          [78.3950, 17.4420],
+          [78.4072, 17.4319],
+          [78.4450, 17.4400],
+          [78.4682, 17.4448],
+        ],
+      },
+      {
+        id: 'hyd-route-2',
+        name: 'Gachibowli Outer Expressway Corridor',
+        summary: 'Via Bio-Diversity Flyover → Mindspace Junction',
+        distanceKm: 17.2,
+        durationMin: 52,
+        standardDurationMin: 52,
+        timeSavedMin: 0,
+        co2Kg: 3.1,
+        congestionLevel: 'severe',
+        isRecommended: false,
+        coordinates: [
+          [78.3808, 17.4504],
+          [78.3615, 17.4401],
+          [78.4072, 17.4319],
+          [78.4682, 17.4448],
+        ],
+      },
+    ],
     junctions: [
       { id: 'hyd-1', name: 'HITECH City Cyber Towers', lat: 17.4504, lng: 78.3808, status: 'critical', waitTimeSec: 215, queueLengthVeh: 1520, congestionPct: 91 },
       { id: 'hyd-2', name: 'Gachibowli Bio-Diversity Flyover', lat: 17.4401, lng: 78.3615, status: 'red', waitTimeSec: 155, queueLengthVeh: 1100, congestionPct: 82 },

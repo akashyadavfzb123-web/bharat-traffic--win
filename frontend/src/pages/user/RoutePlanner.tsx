@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { trafficService } from '../../services/api';
 import type { RouteOption } from '../../types/traffic';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
-import { LoadingState } from '../../components/LoadingState';
+import { useApp } from '../../context/AppContext';
+import { CITIES } from '../../data/cityData';
 import {
   Navigation,
   MapPin,
@@ -17,39 +17,69 @@ import {
 } from 'lucide-react';
 
 export const UserRoutePlanner: React.FC = () => {
-  const [fromLocation, setFromLocation] = useState('Koramangala 5th Block, Bengaluru');
-  const [toLocation, setToLocation] = useState('Whitefield ITPL, Bengaluru');
+  const { selectedCity } = useApp();
+  const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
+
+  const [fromLocation, setFromLocation] = useState(cityConfig.defaultOrigin);
+  const [toLocation, setToLocation] = useState(cityConfig.defaultDestination);
   const [travelMode, setTravelMode] = useState<'car' | 'bike' | 'transit'>('car');
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
-  const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
 
-  const fetchRoutes = async (origin: string, destination: string) => {
-    try {
-      const res = await trafficService.getRouteOptions(origin, destination);
-      setRoutes(res);
-      const best = res.find((r) => r.isRecommended) || res[0];
-      setSelectedRoute(best);
-    } finally {
-      setLoading(false);
-      setCalculating(false);
-    }
-  };
-
+  // Sync inputs and routes whenever selectedCity changes in global header
   useEffect(() => {
-    fetchRoutes(fromLocation, toLocation);
-  }, []);
+    setFromLocation(cityConfig.defaultOrigin);
+    setToLocation(cityConfig.defaultDestination);
+
+    const formattedRoutes: RouteOption[] = cityConfig.routes.map((r) => ({
+      id: r.id,
+      name: r.name,
+      origin: cityConfig.defaultOrigin,
+      destination: cityConfig.defaultDestination,
+      viaRoads: r.summary.split(' → '),
+      distanceKm: r.distanceKm,
+      durationMin: r.durationMin,
+      normalDurationMin: r.standardDurationMin,
+      timeSavedMin: r.timeSavedMin,
+      co2EmissionsKg: r.co2Kg,
+      congestionLevel: r.congestionLevel,
+      isRecommended: r.isRecommended,
+      coordinates: r.coordinates,
+    }));
+
+    setRoutes(formattedRoutes);
+    const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0];
+    setSelectedRoute(rec);
+  }, [selectedCity, cityConfig]);
 
   const handleCalculate = async (e: React.FormEvent) => {
     e.preventDefault();
     setCalculating(true);
-    await fetchRoutes(fromLocation, toLocation);
-  };
 
-  if (loading) {
-    return <LoadingState message="Calculating optimal traffic-free bypass routes..." />;
-  }
+    setTimeout(() => {
+      const formattedRoutes: RouteOption[] = cityConfig.routes.map((r) => ({
+        id: r.id,
+        name: r.name,
+        origin: fromLocation,
+        destination: toLocation,
+        viaRoads: r.summary.split(' → '),
+        distanceKm: r.distanceKm,
+        durationMin: r.durationMin,
+        normalDurationMin: r.standardDurationMin,
+        timeSavedMin: r.timeSavedMin,
+        co2EmissionsKg: r.co2Kg,
+        congestionLevel: r.congestionLevel,
+        isRecommended: r.isRecommended,
+        coordinates: r.coordinates,
+      }));
+
+      setRoutes(formattedRoutes);
+      const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0];
+      setSelectedRoute(rec);
+      setCalculating(false);
+    }, 500);
+  };
 
   const recommendedRoute = routes.find((r) => r.isRecommended) || routes[0];
   const alternativeRoutes = routes.filter((r) => !r.isRecommended);
@@ -61,14 +91,14 @@ export const UserRoutePlanner: React.FC = () => {
         <div className="flex items-center gap-2">
           <h2 className="text-xl font-extrabold text-slate-100 font-mono flex items-center gap-2">
             <Navigation className="w-5 h-5 text-cyan-400" />
-            Smart Route Planner & Traffic Avoidance
+            Smart Route Planner & Traffic Avoidance ({selectedCity.toUpperCase()})
           </h2>
           <Badge color="cyan" dot>
-            AI Routing Matrix
+            AI ROUTING MATRIX
           </Badge>
         </div>
         <p className="text-xs text-slate-400 mt-0.5">
-          Enter starting location and destination to compare traffic-aware routes, distance, ETA, and time saved.
+          Enter starting location and destination in {selectedCity} to compare traffic-aware routes, distance, ETA, and time saved.
         </p>
       </div>
 
@@ -80,7 +110,7 @@ export const UserRoutePlanner: React.FC = () => {
             header={
               <div className="flex items-center gap-2 font-mono text-xs font-bold text-slate-200 uppercase">
                 <Sparkles className="w-4 h-4 text-cyan-400" />
-                <span>Calculate Journey Route</span>
+                <span>Calculate Journey Route ({selectedCity})</span>
               </div>
             }
           >
@@ -176,7 +206,7 @@ export const UserRoutePlanner: React.FC = () => {
           {/* 2. Recommended Route Section */}
           <div>
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono block mb-2">
-              Recommended Route
+              Recommended Route ({selectedCity})
             </span>
             {recommendedRoute && (
               <div
@@ -197,7 +227,7 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Via: {recommendedRoute.viaRoads.join(' → ')}
+                  Via: {recommendedRoute.viaRoads?.join(' → ')}
                 </p>
 
                 {/* Key Metrics: Distance, ETA, Traffic Condition, Time Saved */}
@@ -261,7 +291,7 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-[11px] text-slate-400 mt-1 font-mono">
-                  Via: {rt.viaRoads.join(', ')}
+                  Via: {rt.viaRoads?.join(', ')}
                 </p>
 
                 <div className="mt-2.5 flex items-center justify-between text-xs font-mono pt-2 border-t border-slate-800">
@@ -280,7 +310,7 @@ export const UserRoutePlanner: React.FC = () => {
             <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex flex-wrap justify-between items-center gap-3">
               <div>
                 <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider block">
-                  Currently Viewing Route Geometry
+                  Currently Viewing Route Geometry ({selectedCity})
                 </span>
                 <h3 className="text-sm font-bold text-slate-100">{selectedRoute.name}</h3>
               </div>
