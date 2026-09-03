@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 # ── Enums ─────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ class IncidentOut(BaseModel):
     longitude: float | None
     reported_at: datetime | None
     resolved_at: datetime | None
-    reported_by: int | None
+    # reported_by omitted — column not yet present in deployed DB
     created_at: datetime | None
 
     model_config = {"from_attributes": True}

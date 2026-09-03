@@ -22,11 +22,12 @@ class Incident(Base, TimestampMixin):
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="active")  # active, resolved
-    reported_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    # NOTE: reported_by column does not exist in the deployed DB yet.
+    # It is excluded from the ORM model to prevent ProgrammingError crashes.
+    # Add it via migration: ALTER TABLE incidents ADD COLUMN reported_by INTEGER REFERENCES users(id);
 
     # relationships
     city: Mapped["City"] = relationship(back_populates="incidents")
     road: Mapped["Road | None"] = relationship(back_populates="incidents")
     intersection: Mapped["Intersection | None"] = relationship(back_populates="incidents")
     emergency_routes: Mapped[list["EmergencyRoute"]] = relationship(back_populates="incident")
-    reporter: Mapped["User | None"] = relationship(foreign_keys=[reported_by])
