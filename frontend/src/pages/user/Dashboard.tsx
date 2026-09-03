@@ -40,12 +40,12 @@ export const UserDashboard: React.FC = () => {
     setCurrentLocation(cityConfig.defaultOrigin);
     setDestination(cityConfig.defaultDestination);
 
-    const formattedRoutes: RouteOption[] = cityConfig.routes.map((r) => ({
+    const formattedRoutes: RouteOption[] = (cityConfig.routes || []).map((r) => ({
       id: r.id,
       name: r.name,
       origin: cityConfig.defaultOrigin,
       destination: cityConfig.defaultDestination,
-      viaRoads: r.summary.split(' → '),
+      viaRoads: (r.summary || '').split(' → '),
       distanceKm: r.distanceKm,
       durationMin: r.durationMin,
       normalDurationMin: r.standardDurationMin,
@@ -62,8 +62,8 @@ export const UserDashboard: React.FC = () => {
       trafficService.getIncidents(),
       trafficService.getPredictions(),
     ]).then(([incs, preds]) => {
-      setIncidents(incs);
-      setPredictions(preds.slice(0, 8));
+      setIncidents(incs || []);
+      setPredictions((preds || []).slice(0, 8));
       setLoading(false);
     });
   }, [selectedCity, cityConfig]);
@@ -176,7 +176,7 @@ export const UserDashboard: React.FC = () => {
                 {recommendedRoute?.name || 'Smart Dynamic Bypass (AI Recommended)'}
               </h4>
               <p className="text-xs text-slate-400 mt-1 font-mono">
-                Via: {recommendedRoute?.viaRoads?.join(' → ')}
+                Via: {(recommendedRoute?.viaRoads || []).join(' → ')}
               </p>
             </div>
 
@@ -247,7 +247,7 @@ export const UserDashboard: React.FC = () => {
           }
         >
           <div className="space-y-3">
-            {incidents.slice(0, 3).map((inc) => (
+            {(incidents || []).slice(0, 3).map((inc) => (
               <div
                 key={inc.id}
                 className="p-3.5 bg-slate-950/70 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 hover:border-slate-700 transition-all"

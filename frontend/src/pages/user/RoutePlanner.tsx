@@ -32,12 +32,12 @@ export const UserRoutePlanner: React.FC = () => {
     setFromLocation(cityConfig.defaultOrigin);
     setToLocation(cityConfig.defaultDestination);
 
-    const formattedRoutes: RouteOption[] = cityConfig.routes.map((r) => ({
+    const formattedRoutes: RouteOption[] = (cityConfig.routes || []).map((r) => ({
       id: r.id,
       name: r.name,
       origin: cityConfig.defaultOrigin,
       destination: cityConfig.defaultDestination,
-      viaRoads: r.summary.split(' → '),
+      viaRoads: (r.summary || '').split(' → '),
       distanceKm: r.distanceKm,
       durationMin: r.durationMin,
       normalDurationMin: r.standardDurationMin,
@@ -49,7 +49,7 @@ export const UserRoutePlanner: React.FC = () => {
     }));
 
     setRoutes(formattedRoutes);
-    const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0];
+    const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0] || null;
     setSelectedRoute(rec);
   }, [selectedCity, cityConfig]);
 
@@ -58,12 +58,12 @@ export const UserRoutePlanner: React.FC = () => {
     setCalculating(true);
 
     setTimeout(() => {
-      const formattedRoutes: RouteOption[] = cityConfig.routes.map((r) => ({
+      const formattedRoutes: RouteOption[] = (cityConfig.routes || []).map((r) => ({
         id: r.id,
         name: r.name,
         origin: fromLocation,
         destination: toLocation,
-        viaRoads: r.summary.split(' → '),
+        viaRoads: (r.summary || '').split(' → '),
         distanceKm: r.distanceKm,
         durationMin: r.durationMin,
         normalDurationMin: r.standardDurationMin,
@@ -75,13 +75,13 @@ export const UserRoutePlanner: React.FC = () => {
       }));
 
       setRoutes(formattedRoutes);
-      const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0];
+      const rec = formattedRoutes.find((r) => r.isRecommended) || formattedRoutes[0] || null;
       setSelectedRoute(rec);
       setCalculating(false);
     }, 500);
   };
 
-  const recommendedRoute = routes.find((r) => r.isRecommended) || routes[0];
+  const recommendedRoute = routes.find((r) => r.isRecommended) || routes[0] || null;
   const alternativeRoutes = routes.filter((r) => !r.isRecommended);
 
   return (
@@ -227,7 +227,7 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Via: {recommendedRoute.viaRoads?.join(' → ')}
+                  Via: {(recommendedRoute?.viaRoads || []).join(' → ')}
                 </p>
 
                 {/* Key Metrics: Distance, ETA, Traffic Condition, Time Saved */}
@@ -291,7 +291,7 @@ export const UserRoutePlanner: React.FC = () => {
                 </div>
 
                 <p className="text-[11px] text-slate-400 mt-1 font-mono">
-                  Via: {rt.viaRoads?.join(', ')}
+                  Via: {(rt?.viaRoads || []).join(', ')}
                 </p>
 
                 <div className="mt-2.5 flex items-center justify-between text-xs font-mono pt-2 border-t border-slate-800">
