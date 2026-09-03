@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { trafficService } from '../../services/api';
 import type { Junction, Incident } from '../../types/traffic';
 import type { RoadSegmentProperties } from '../../data/mockGeoJSON';
-import { CITIES } from '../../data/cityData';
 import { useRealtime } from '../../context/RealtimeContext';
 import { useApp } from '../../context/AppContext';
+import { getSyntheticTrafficData } from '../../services/syntheticTrafficProvider';
+import type { SyntheticTrafficData } from '../../types/synthetic';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Link } from 'react-router-dom';
 import {
@@ -36,29 +37,32 @@ export const AdminLiveTraffic: React.FC = () => {
   const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
 
-  const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
+  const synthData: SyntheticTrafficData = useMemo(
+    () => getSyntheticTrafficData(selectedCity),
+    [selectedCity]
+  );
 
   useEffect(() => {
-    // Map cityConfig junctions into Junction types
-    const cityJunctions: Junction[] = cityConfig.junctions.map((cj) => ({
-      id: cj.id,
-      name: cj.name,
+    // Map synthetic junctions into Junction types
+    const cityJunctions: Junction[] = synthData.junctions.map((sj) => ({
+      id: sj.id,
+      name: sj.name,
       city: selectedCity,
-      lat: cj.lat,
-      lng: cj.lng,
-      status: cj.status,
-      currentWaitTimeSec: cj.waitTimeSec,
-      vehicleCount: cj.queueLengthVeh,
-      congestionIndex: cj.congestionPct,
-      signalMode: cj.status === 'critical' ? 'adaptive' : 'fixed',
-      cycleLengthSec: 90,
-      activePhase: 'Main Phase',
-      lastUpdated: 'Just now',
+      lat: sj.lat,
+      lng: sj.lng,
+      status: sj.status,
+      currentWaitTimeSec: sj.waitTimeSec,
+      vehicleCount: sj.queueLengthVeh,
+      congestionIndex: sj.congestionPct,
+      signalMode: sj.status === 'critical' ? 'adaptive' : 'fixed',
+      cycleLengthSec: sj.status === 'critical' ? 200 : sj.congestionPct > 60 ? 160 : 90,
+      activePhase: sj.status === 'critical' ? 'Green Corridor Override' : 'Standard Phase',
+      lastUpdated: 'SYNTHETIC',
     }));
 
     setJunctions(cityJunctions);
     trafficService.getIncidents().then(setIncidents);
-  }, [selectedCity, cityConfig]);
+  }, [selectedCity, synthData]);
 
   // Sync junction data with real-time simulation
   useEffect(() => {
@@ -99,8 +103,23 @@ export const AdminLiveTraffic: React.FC = () => {
     return true;
   });
 
-  // Filtered roads
-  const roadFeatures = cityConfig.roadsGeoJSON.features.map((f) => f.properties);
+  // Filtered roads from synthetic data
+  const roadFeatures: RoadSegmentProperties[] = useMemo(() => {
+    return synthData.roads.map((r) => ({
+      id: r.id,
+      name: r.roadName,
+      corridor: `${selectedCity} Arterial`,
+      congestion: r.congestion,
+      avgSpeedKmh: r.speed,
+      densityVehKm: Math.round(r.vehicleCount * 0.6),
+      roadStatus: r.congestion > 70 ? 'Gridlock' as const : r.congestion > 40 ? 'Heavy Congestion' as const : r.congestion > 20 ? 'Slow Traffic' as const : 'Clear' as const,
+      incidentCount: 0,
+      laneCount: 3,
+      lengthKm: Math.round(r.coordinates.length * 1.2),
+      lastUpdated: 'SYNTHETIC',
+    }));
+  }, [synthData, selectedCity]);
+
   const filteredRoads = roadFeatures.filter((r) => {
     if (roadFilter === 'gridlock') return r.roadStatus === 'Gridlock';
     if (roadFilter === 'heavy') return r.roadStatus === 'Heavy Congestion';
@@ -109,11 +128,11 @@ export const AdminLiveTraffic: React.FC = () => {
     return true;
   });
 
-  // Filtered GeoJSON for map
-  const filteredGeoJSON = {
-    ...cityConfig.roadsGeoJSON,
-    features: cityConfig.roadsGeoJSON.features.filter((f) => filteredRoads.some((r) => r.id === f.properties.id)),
-  };
+  // Filtered GeoJSON for map from synthetic data
+  const filteredGeoJSON = useMemo(() => ({
+    ...synthData.roadsGeoJSON,
+    features: synthData.roadsGeoJSON.features.filter((f) => filteredRoads.some((r) => r.id === f.properties.id)),
+  }), [synthData, filteredRoads]);
 
   // Summary stats
   const totalVehicles = filteredJunctions.reduce((s, j) => s + j.vehicleCount, 0);
@@ -214,7 +233,7 @@ export const AdminLiveTraffic: React.FC = () => {
               { key: 'heavy', label: 'Heavy', count: roadFeatures.filter((r) => r.roadStatus === 'Heavy Congestion').length, color: 'text-amber-400' },
               { key: 'slow', label: 'Slow', count: roadFeatures.filter((r) => r.roadStatus === 'Slow Traffic').length, color: 'text-yellow-400' },
               { key: 'clear', label: 'Clear', count: roadFeatures.filter((r) => r.roadStatus === 'Clear').length, color: 'text-emerald-400' },
-            ] as const).map((opt) => (
+            ] as const).map((opt: { key: string; label: string; count: number; color?: string }) => (
               <button
                 key={opt.key}
                 onClick={() => setRoadFilter(opt.key as typeof roadFilter)}
@@ -234,6 +253,10 @@ export const AdminLiveTraffic: React.FC = () => {
               junctions={filteredJunctions}
               incidents={incidents}
               roadGeoJSON={filteredGeoJSON as any}
+              cameras={synthData.cameras}
+              sensors={synthData.sensors}
+              busStops={synthData.busStops}
+              metroStations={synthData.metroStations}
               onRoadClick={handleRoadClick}
               onJunctionClick={handleJunctionClick}
               selectedRoadId={selectedTarget?.type === 'road' ? selectedTarget.data.id : null}
