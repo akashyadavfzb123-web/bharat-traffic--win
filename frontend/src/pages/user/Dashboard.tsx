@@ -42,6 +42,7 @@ export const UserDashboard: React.FC = () => {
   useEffect(() => {
     setCurrentLocation(cityConfig.defaultOrigin);
     setDestination(cityConfig.defaultDestination);
+    setLoading(true);
 
     const formattedRoutes: RouteOption[] = (cityConfig.routes || []).map((r) => ({
       id: r.id,
@@ -61,12 +62,19 @@ export const UserDashboard: React.FC = () => {
 
     setRecommendedRoute(formattedRoutes[0] || null);
 
+    // Safety timer: render with mock data after 3s even if API is CORS-blocked
+    const safetyTimer = setTimeout(() => setLoading(false), 3000);
+
     Promise.all([
       trafficService.getIncidents(),
       trafficService.getPredictions(),
     ]).then(([incs, preds]) => {
+      clearTimeout(safetyTimer);
       setIncidents(incs || []);
       setPredictions((preds || []).slice(0, 8));
+      setLoading(false);
+    }).catch(() => {
+      clearTimeout(safetyTimer);
       setLoading(false);
     });
   }, [selectedCity, cityConfig]);
@@ -262,7 +270,7 @@ export const UserDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(cityConfig.roadsGeoJSON?.features || []).map((f) => (
+                  {(cityConfig?.roadsGeoJSON?.features ?? []).map((f) => (
                     <tr key={f.properties.id} className="border-b border-slate-800/60 hover:bg-slate-950/60 transition-colors">
                       <td className="py-2.5 px-3 font-bold text-slate-100 flex items-center gap-2">
                         <Gauge className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
