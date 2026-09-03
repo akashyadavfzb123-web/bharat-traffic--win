@@ -21,6 +21,9 @@ import {
   ArrowRight,
   ShieldCheck,
   Zap,
+  Activity,
+  Gauge,
+  Car,
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -211,19 +214,96 @@ export const UserDashboard: React.FC = () => {
           </div>
         </Card>
 
-        {/* Interactive MapLibre GL Panel */}
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col h-[480px]">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="text-xs font-bold font-mono text-slate-200 uppercase tracking-wider flex items-center gap-2">
-              <Navigation className="w-4 h-4 text-cyan-400" />
-              Live Route Geometry & Junction Overlay ({selectedCity})
-            </h3>
-            <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/20 px-2 py-0.5 rounded">
-              MapLibre GL Active
-            </span>
+        {/* Interactive MapLibre GL Panel + Live Traffic Feed Underneath */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-xl flex flex-col h-[460px]">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-xs font-bold font-mono text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Navigation className="w-4 h-4 text-cyan-400" />
+                Live Route Geometry & Junction Overlay ({selectedCity})
+              </h3>
+              <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/20 px-2 py-0.5 rounded">
+                MapLibre GL Active
+              </span>
+            </div>
+            <div className="flex-1">
+              <MapContainer routes={recommendedRoute ? [recommendedRoute] : []} />
+            </div>
           </div>
-          <div className="flex-1">
-            <MapContainer routes={recommendedRoute ? [recommendedRoute] : []} />
+
+          {/* ── LIVE REAL TRAFFIC CORRIDOR INTELLIGENCE TABLE UNDER MAP ── */}
+          <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-3 font-mono">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div>
+                <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wider flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-emerald-400" />
+                  Real-Time {selectedCity} Corridor Traffic Feed
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5 font-sans">
+                  Live telemetry from IoT sensors & digital twin traffic monitors across major {selectedCity} arteries.
+                </p>
+              </div>
+              <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20 font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                SENSORS LIVE
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-[10px] text-slate-400 uppercase">
+                    <th className="py-2 px-3">Corridor / Road Segment</th>
+                    <th className="py-2 px-3">Current Speed</th>
+                    <th className="py-2 px-3">Density</th>
+                    <th className="py-2 px-3">Congestion</th>
+                    <th className="py-2 px-3">Traffic Status</th>
+                    <th className="py-2 px-3">Active Telemetry</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(cityConfig.roadsGeoJSON?.features || []).map((f) => (
+                    <tr key={f.properties.id} className="border-b border-slate-800/60 hover:bg-slate-950/60 transition-colors">
+                      <td className="py-2.5 px-3 font-bold text-slate-100 flex items-center gap-2">
+                        <Gauge className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span>{f.properties.name}</span>
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-cyan-400">{f.properties.avgSpeedKmh} km/h</td>
+                      <td className="py-2.5 px-3 text-slate-300">{f.properties.densityVehKm} v/km</td>
+                      <td className="py-2.5 px-3 font-bold" style={{ color: f.properties.congestion > 70 ? '#ef4444' : f.properties.congestion > 40 ? '#eab308' : '#22c55e' }}>
+                        {f.properties.congestion}%
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                          f.properties.roadStatus === 'Gridlock' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                          f.properties.roadStatus === 'Heavy Congestion' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                          f.properties.roadStatus === 'Slow Traffic' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                          'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        }`}>
+                          {f.properties.roadStatus}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-xs text-slate-300">
+                        <div className="flex items-center gap-1.5">
+                          {(cityConfig.vehicles || []).length > 0 ? (
+                            (cityConfig.vehicles || []).map((v) => (
+                              <span key={v.id} className="text-sm" title={`${v.name} (${v.status})`}>
+                                {v.type === 'ambulance' ? '🚑' : v.type === 'city_bus' ? '🚌' : '🚘'}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-[10px] text-slate-500">
+                              <Car className="w-3.5 h-3.5 inline mr-1 text-slate-400" />
+                              Active Monitoring
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
