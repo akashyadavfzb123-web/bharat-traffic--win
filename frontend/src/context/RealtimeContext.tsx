@@ -130,15 +130,22 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!wsData) return;
 
     setSnapshot((prev) => {
-      // Map WebSocket signals to junctions
-      const wsJunctions: Junction[] = wsData.signals.map((sig) => {
-        const speed = Object.values(wsData.speed)[0] || 24;
-        const vehicleCount = Object.values(wsData.vehicles).reduce((a, b) => a + b, 0);
-        const congestionValues = Object.values(wsData.congestion);
+      // Map WebSocket signals to junctions defensively
+      const signalsList = Array.isArray(wsData.signals) ? wsData.signals : [];
+      const speedObj = wsData.speed || {};
+      const vehiclesObj = wsData.vehicles || {};
+      const congestionObj = wsData.congestion || {};
+      const summaryObj = wsData.summary || {};
+      const breakdownObj = summaryObj.congestion_breakdown || {};
+
+      const wsJunctions: Junction[] = signalsList.map((sig) => {
+        const speed = Object.values(speedObj)[0] || 24;
+        const vehicleCount = Object.values(vehiclesObj).reduce((a, b) => a + b, 0);
+        const congestionValues = Object.values(congestionObj);
         const worstCongestion = congestionValues.length > 0
-          ? Math.max(...Object.keys(wsData.summary.congestion_breakdown).map((k) => {
+          ? Math.max(...Object.keys(breakdownObj).map((k) => {
               const levels: Record<string, number> = { free_flow: 0, moderate: 1, slow: 2, congested: 3, gridlock: 4 };
-              return (levels[k] || 0) * (wsData.summary.congestion_breakdown[k] || 0);
+              return (levels[k] || 0) * (breakdownObj[k] || 0);
             }))
           : 0;
         const congestionIndex = Math.min(100, Math.round((worstCongestion / Math.max(vehicleCount, 1)) * 100));
@@ -156,8 +163,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           lng: 0,
           status,
           currentWaitTimeSec: sig.cycle_time_seconds || 90,
-          vehicleCount: Math.round(vehicleCount / Math.max(wsData.signals.length, 1)),
-          congestionIndex: Math.round(congestionIndex / Math.max(wsData.signals.length, 1)),
+          vehicleCount: Math.round(vehicleCount / Math.max(signalsList.length, 1)),
+          congestionIndex: Math.round(congestionIndex / Math.max(signalsList.length, 1)),
           signalMode: (sig.signal_type as any) || 'adaptive',
           cycleLengthSec: sig.cycle_time_seconds || 90,
           activePhase: (sig.phases as any)?.active_phase || 'Standard Phase',
@@ -166,8 +173,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } as Junction;
       });
 
-      // Map WebSocket incidents
-      const wsIncidents: Incident[] = wsData.incidents.map((inc) => ({
+      // Map WebSocket incidents defensively
+      const incidentsList = Array.isArray(wsData.incidents) ? wsData.incidents : [];
+      const wsIncidents: Incident[] = incidentsList.map((inc) => ({
         id: `inc-${inc.id}`,
         title: inc.description || `${inc.incident_type} incident`,
         type: inc.incident_type as Incident['type'],
@@ -185,14 +193,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Update city stats from WS summary
       const newCityStats: CitySummaryStats = {
         ...prev.cityStats,
-        totalVehiclesTracked: wsData.summary.total_vehicles,
-        avgCitySpeedKmh: wsData.summary.avg_speed_kmph,
-        activeIncidents: wsData.summary.active_incidents,
+        totalVehiclesTracked: summaryObj.total_vehicles ?? prev.cityStats.totalVehiclesTracked,
+        avgCitySpeedKmh: summaryObj.avg_speed_kmph ?? prev.cityStats.avgCitySpeedKmh,
+        activeIncidents: summaryObj.active_incidents ?? prev.cityStats.activeIncidents,
       };
 
       return {
         ...prev,
-        timestamp: wsData.timestamp,
+        timestamp: wsData.timestamp || Date.now(),
         junctions: wsJunctions.length > 0 ? wsJunctions : prev.junctions,
         incidents: wsIncidents.length > 0 ? wsIncidents : prev.incidents,
         cityStats: newCityStats,

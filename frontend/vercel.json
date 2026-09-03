@@ -1,19 +1,8 @@
 {
-  "routes": [
+  "rewrites": [
     {
-      "src": "/assets/(.*)",
-      "headers": {
-        "cache-control": "public, max-age=31536000, immutable"
-      },
-      "dest": "/assets/$1"
-    },
-    {
-      "src": "/(.*\\.js|.*\\.mjs|.*\\.css|.*\\.png|.*\\.ico|.*\\.svg|.*\\.json|.*\\.map|.*\\.woff|.*\\.woff2|.*\\.ttf)",
-      "dest": "/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/((?!assets/|.*\\..*).*)",
+      "destination": "/index.html"
     }
   ]
 }

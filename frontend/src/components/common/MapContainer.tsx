@@ -74,8 +74,14 @@ export const MapContainer: React.FC<MapProps> = ({
   const { selectedCity, setSelectedCity } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
   const isMapLoadedRef = useRef<boolean>(false);
+
+  // Persistent marker references to prevent DOM tearing / marker blinking
+  const junctionMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement; popup: maplibregl.Popup }>>(new Map());
+  const vehicleMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement; popup: maplibregl.Popup }>>(new Map());
+  const incidentMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
+  const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const searchMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
@@ -87,6 +93,24 @@ export const MapContainer: React.FC<MapProps> = ({
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
+
+  // Clear all markers helper
+  const clearAllMarkers = () => {
+    junctionMarkersRef.current.forEach((item) => item.marker.remove());
+    junctionMarkersRef.current.clear();
+
+    vehicleMarkersRef.current.forEach((item) => item.marker.remove());
+    vehicleMarkersRef.current.clear();
+
+    incidentMarkersRef.current.forEach((item) => item.marker.remove());
+    incidentMarkersRef.current.clear();
+
+    routeMarkersRef.current.forEach((m) => m.remove());
+    routeMarkersRef.current = [];
+
+    searchMarkersRef.current.forEach((m) => m.remove());
+    searchMarkersRef.current = [];
+  };
 
   // Handle Location Search
   useEffect(() => {
@@ -108,6 +132,7 @@ export const MapContainer: React.FC<MapProps> = ({
     setSelectedCity(cityName);
     const targetCity = CITIES[cityName];
     if (mapRef.current && targetCity) {
+      clearAllMarkers();
       mapRef.current.flyTo({
         center: targetCity.center,
         zoom: targetCity.zoom,
@@ -130,16 +155,17 @@ export const MapContainer: React.FC<MapProps> = ({
         .setLngLat([lng, lat])
         .setPopup(new maplibregl.Popup().setHTML(`<b style="color: #0284c7;">${res.display_name}</b>`))
         .addTo(mapRef.current);
-      markersRef.current.push(m);
+      searchMarkersRef.current.push(m);
     }
     setSearchResults([]);
     setSearchQuery('');
   };
 
-  // 1. Initialize Map ONCE per container/style/city mount
+  // 1. Initialize Map ONCE per container / currentStyle / selectedCity
   useEffect(() => {
     if (!mapContainerRef.current) return;
     isMapLoadedRef.current = false;
+    clearAllMarkers();
 
     const activeTileUrl = MAP_STYLES[currentStyle].url;
 
@@ -180,22 +206,17 @@ export const MapContainer: React.FC<MapProps> = ({
 
     return () => {
       isMapLoadedRef.current = false;
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
+      clearAllMarkers();
       map.remove();
       mapRef.current = null;
     };
   }, [currentStyle, selectedCity]);
 
-  // Function to dynamically update layers & markers WITHOUT tearing down the map
+  // Function to smoothly update layers & markers WITHOUT tearing down or flickering
   const updateMapData = (map: maplibregl.Map) => {
     if (!map || !isMapLoadedRef.current) return;
 
-    // Clear old HTML markers
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
-
-    // 1. Traffic Flow Lines
+    // 1. Traffic Flow Lines (GeoJSON Source Update)
     const targetGeoJSON = roadGeoJSON || cityConfig.roadsGeoJSON;
     if (map.getSource('road-segments-src')) {
       (map.getSource('road-segments-src') as maplibregl.GeoJSONSource).setData(targetGeoJSON as any);
@@ -263,11 +284,20 @@ export const MapContainer: React.FC<MapProps> = ({
     }
 
     // 2. Custom Route Lines
-    routes.forEach((route) => {
+    (routes || []).forEach((route) => {
       const sourceId = `route-source-${route.id}`;
       const layerId = `route-layer-${route.id}`;
 
-      if (!map.getSource(sourceId)) {
+      if (map.getSource(sourceId)) {
+        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData({
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'LineString',
+            coordinates: route.coordinates,
+          },
+        });
+      } else {
         map.addSource(sourceId, {
           type: 'geojson',
           data: {
@@ -314,8 +344,8 @@ export const MapContainer: React.FC<MapProps> = ({
       }
     });
 
-    // 2b. Route Origin / Destination Markers
-    if (routes.length > 0) {
+    // 2b. Route Origin / Destination Markers (only recreate if count changed)
+    if (routes.length > 0 && routeMarkersRef.current.length === 0) {
       const firstRoute = routes[0];
       if (firstRoute.coordinates && firstRoute.coordinates.length >= 2) {
         const originEl = document.createElement('div');
@@ -325,7 +355,7 @@ export const MapContainer: React.FC<MapProps> = ({
           .setLngLat(firstRoute.coordinates[0])
           .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#10b981;'>Origin:</b> ${firstRoute.origin || 'Start'}`))
           .addTo(map);
-        markersRef.current.push(m1);
+        routeMarkersRef.current.push(m1);
 
         const destEl = document.createElement('div');
         destEl.className = 'w-5 h-5 rounded-full bg-red-500 border-2 border-white flex items-center justify-center shadow-lg z-30';
@@ -334,26 +364,19 @@ export const MapContainer: React.FC<MapProps> = ({
           .setLngLat(firstRoute.coordinates[firstRoute.coordinates.length - 1])
           .setPopup(new maplibregl.Popup().setHTML(`<b style='color:#ef4444;'>Destination:</b> ${firstRoute.destination || 'End'}`))
           .addTo(map);
-        markersRef.current.push(m2);
+        routeMarkersRef.current.push(m2);
       }
+    } else if (routes.length === 0 && routeMarkersRef.current.length > 0) {
+      routeMarkersRef.current.forEach((m) => m.remove());
+      routeMarkersRef.current = [];
     }
 
-    // 3. Render Ambulances & Emergency Priority Vehicles
+    // 3. Render / Update Ambulances & Emergency Priority Vehicles Persistently
     if (showEmergencyVehicles) {
       (cityConfig.vehicles || [])
         .filter((v) => v.type === 'ambulance' || v.type === 'fire_brigade')
         .forEach((v) => {
-          const el = document.createElement('div');
-          el.className =
-            'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
-          el.style.boxShadow = '0 0 16px #ef4444';
-
-          el.innerHTML = `
-            <span class="text-sm">🚑</span>
-            <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
-          `;
-
-          const popupContent = `
+          const popupHtml = `
             <div style="font-family: monospace; padding: 4px; min-width: 200px;">
               <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px;">
                 <span style="font-size: 11px; font-weight: bold; color: #ef4444; text-transform: uppercase;">🚑 Emergency Ambulance</span>
@@ -371,36 +394,37 @@ export const MapContainer: React.FC<MapProps> = ({
             </div>
           `;
 
-          const m = new maplibregl.Marker(el)
-            .setLngLat([v.lng, v.lat])
-            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-            .addTo(map);
-          markersRef.current.push(m);
+          const existing = vehicleMarkersRef.current.get(v.id);
+          if (existing) {
+            existing.marker.setLngLat([v.lng, v.lat]);
+            existing.popup.setHTML(popupHtml);
+          } else {
+            const el = document.createElement('div');
+            el.className =
+              'relative w-8 h-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center font-black text-xs shadow-2xl cursor-pointer transition-transform hover:scale-125 z-30 animate-bounce';
+            el.style.boxShadow = '0 0 16px #ef4444';
+            el.innerHTML = `
+              <span class="text-sm">🚑</span>
+              <span class="absolute -top-1 -right-1 w-3 h-3 bg-cyan-400 rounded-full animate-ping"></span>
+            `;
+
+            const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
+            const marker = new maplibregl.Marker(el)
+              .setLngLat([v.lng, v.lat])
+              .setPopup(popup)
+              .addTo(map);
+
+            vehicleMarkersRef.current.set(v.id, { marker, el, popup });
+          }
         });
     }
 
-    // 4. Render Buses, Heavy Vehicles & Traffic Clusters
+    // 4. Render / Update Buses, Heavy Freight & Clusters Persistently
     if (showTransitVehicles) {
       (cityConfig.vehicles || [])
         .filter((v) => v.type === 'city_bus' || v.type === 'heavy_freight' || v.type === 'high_traffic_cluster')
         .forEach((v) => {
-          const el = document.createElement('div');
-
-          if (v.type === 'city_bus') {
-            el.className =
-              'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-            el.innerHTML = '🚌';
-          } else if (v.type === 'heavy_freight') {
-            el.className =
-              'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
-            el.innerHTML = '🚛';
-          } else {
-            el.className =
-              'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
-            el.innerHTML = '🚘';
-          }
-
-          const popupContent = `
+          const popupHtml = `
             <div style="font-family: monospace; padding: 4px; min-width: 180px;">
               <h4 style="margin: 0; font-size: 11px; font-weight: bold; color: #38bdf8;">${v.name}</h4>
               <div style="margin-top: 4px; font-size: 10px; color: #94a3b8;">
@@ -411,41 +435,46 @@ export const MapContainer: React.FC<MapProps> = ({
             </div>
           `;
 
-          const m = new maplibregl.Marker(el)
-            .setLngLat([v.lng, v.lat])
-            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-            .addTo(map);
-          markersRef.current.push(m);
+          const existing = vehicleMarkersRef.current.get(v.id);
+          if (existing) {
+            existing.marker.setLngLat([v.lng, v.lat]);
+            existing.popup.setHTML(popupHtml);
+          } else {
+            const el = document.createElement('div');
+            if (v.type === 'city_bus') {
+              el.className =
+                'w-7 h-7 rounded-lg bg-cyan-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+              el.innerHTML = '🚌';
+            } else if (v.type === 'heavy_freight') {
+              el.className =
+                'w-7 h-7 rounded-lg bg-amber-600 border-2 border-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-md cursor-pointer transition-transform hover:scale-125 z-20';
+              el.innerHTML = '🚛';
+            } else {
+              el.className =
+                'w-8 h-8 rounded-full bg-red-950 border-2 border-red-500 text-red-400 flex items-center justify-center font-bold text-xs shadow-lg cursor-pointer transition-transform hover:scale-125 z-20 animate-pulse';
+              el.innerHTML = '🚘';
+            }
+
+            const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
+            const marker = new maplibregl.Marker(el)
+              .setLngLat([v.lng, v.lat])
+              .setPopup(popup)
+              .addTo(map);
+
+            vehicleMarkersRef.current.set(v.id, { marker, el, popup });
+          }
         });
     }
 
-    // 5. Render City Junction Markers
-    const activeJunctions = junctions.length > 0 ? junctions : cityConfig.junctions;
+    // 5. Render / Update Junction Markers PERSISTENTLY (No remove/recreate!)
+    const activeJunctions = (junctions && junctions.length > 0) ? junctions : cityConfig.junctions;
     activeJunctions.forEach((j: any) => {
-      const el = document.createElement('div');
-      el.className =
-        'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-125 border-2 border-slate-900 shadow-lg';
+      const statusColor =
+        j.status === 'critical' ? '#ef4444' :
+        j.status === 'red' ? '#f97316' :
+        j.status === 'yellow' ? '#eab308' : '#22c55e';
 
-      if (j.status === 'critical') {
-        el.style.backgroundColor = '#ef4444';
-        el.style.boxShadow = '0 0 12px #ef4444';
-      } else if (j.status === 'red') {
-        el.style.backgroundColor = '#f97316';
-      } else if (j.status === 'yellow') {
-        el.style.backgroundColor = '#eab308';
-      } else {
-        el.style.backgroundColor = '#22c55e';
-      }
-
-      const inner = document.createElement('div');
-      inner.className = 'w-2 h-2 rounded-full bg-white';
-      el.appendChild(inner);
-
-      el.addEventListener('click', () => {
-        if (onJunctionClick) onJunctionClick(j);
-      });
-
-      const popupContent = `
+      const popupHtml = `
         <div style="font-family: monospace; padding: 4px;">
           <h4 style="margin: 0; font-size: 13px; font-weight: bold; color: #38bdf8;">${j.name}</h4>
           <p style="margin: 2px 0 0; font-size: 11px; color: #94a3b8;">Metro: ${selectedCity}</p>
@@ -457,25 +486,53 @@ export const MapContainer: React.FC<MapProps> = ({
         </div>
       `;
 
-      const m = new maplibregl.Marker(el)
-        .setLngLat([j.lng, j.lat])
-        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupContent))
-        .addTo(map);
-      markersRef.current.push(m);
+      const existing = junctionMarkersRef.current.get(j.id);
+      if (existing) {
+        // Smoothly update styles in-place without removing DOM node
+        existing.el.style.backgroundColor = statusColor;
+        existing.el.style.boxShadow = j.status === 'critical' ? '0 0 12px #ef4444' : 'none';
+        existing.popup.setHTML(popupHtml);
+      } else {
+        // Create marker ONCE
+        const el = document.createElement('div');
+        el.className =
+          'w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition-all border-2 border-slate-900 shadow-lg';
+        el.style.backgroundColor = statusColor;
+        if (j.status === 'critical') el.style.boxShadow = '0 0 12px #ef4444';
+
+        const inner = document.createElement('div');
+        inner.className = 'w-2 h-2 rounded-full bg-white';
+        el.appendChild(inner);
+
+        el.addEventListener('click', () => {
+          if (onJunctionClick) onJunctionClick(j);
+        });
+
+        const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml);
+        const marker = new maplibregl.Marker(el)
+          .setLngLat([j.lng, j.lat])
+          .setPopup(popup)
+          .addTo(map);
+
+        junctionMarkersRef.current.set(j.id, { marker, el, popup });
+      }
     });
 
-    // 6. Render Incidents
-    incidents.forEach((inc) => {
-      const el = document.createElement('div');
-      el.className =
-        'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
-      el.innerHTML = '⚠️';
+    // 6. Render Incidents Persistently
+    (incidents || []).forEach((inc) => {
+      if (!incidentMarkersRef.current.has(inc.id)) {
+        const el = document.createElement('div');
+        el.className =
+          'w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-xs shadow-lg animate-pulse border-2 border-white cursor-pointer';
+        el.innerHTML = '⚠️';
 
-      const m = new maplibregl.Marker(el)
-        .setLngLat([inc.lng, inc.lat])
-        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
-        .addTo(map);
-      markersRef.current.push(m);
+        const marker = new maplibregl.Marker(el)
+          .setLngLat([inc.lng, inc.lat])
+          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<b>${inc.title}</b><br/>${inc.locationName}`))
+          .addTo(map);
+
+        incidentMarkersRef.current.set(inc.id, { marker, el });
+      }
     });
   };
 
