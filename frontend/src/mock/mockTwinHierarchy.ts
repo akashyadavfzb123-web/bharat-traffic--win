@@ -233,7 +233,7 @@ export function getIntersectionById(id: string): TwinIntersection | undefined {
 // Returns the correct data arrays for any supported city.
 // Bengaluru returns the static arrays above; other cities return from cityHierarchyData.ts.
 
-import { getCityHierarchy, type CityHierarchy } from '../data/cityHierarchyData';
+import { getCityHierarchy } from '../data/cityHierarchyData';
 
 /**
  * Get the complete city hierarchy for the given city name.

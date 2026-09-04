@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import {
   MOCK_EMERGENCY_CORRIDORS,
   DELHI_EMERGENCY_CORRIDORS,

@@ -61,11 +61,6 @@ export const AdminWhatIfScenarios: React.FC = () => {
 
   const { selectedCity } = useApp();
 
-  // All pre-built simulations (Bengaluru + Delhi)
-  const allPrebuiltSimulations = useMemo(() => {
-    return [...DELHI_COMPLETED_SIMULATIONS, ...MOCK_COMPLETED_SIMULATIONS];
-  }, []);
-
   // Roads for selected city
   const cityRoads = useMemo(() => getMockRoadsForCity(selectedCity), [selectedCity]);
 
