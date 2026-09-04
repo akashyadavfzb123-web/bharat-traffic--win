@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   MOCK_EMERGENCY_CORRIDORS,
+  DELHI_EMERGENCY_CORRIDORS,
   VEHICLE_TYPE_CONFIG,
   getActiveCorridorCount,
   type EmergencyCorridorData,
@@ -21,7 +22,7 @@ import {
 
 export const AdminEmergencyCorridor: React.FC = () => {
   const { addToast } = useToast();
-  const [corridors, setCorridors] = useState<EmergencyCorridorData[]>(MOCK_EMERGENCY_CORRIDORS);
+  const [corridors, setCorridors] = useState<EmergencyCorridorData[]>([...DELHI_EMERGENCY_CORRIDORS, ...MOCK_EMERGENCY_CORRIDORS]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const activeCount = getActiveCorridorCount(corridors);
@@ -78,6 +79,9 @@ export const AdminEmergencyCorridor: React.FC = () => {
           <p className="text-[11px] text-slate-400">
             AI-optimized emergency vehicle routing — simulate routes, review signal coordination, and approve deployment.
           </p>
+          <span className="inline-block mt-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono font-bold text-amber-400">
+            DEMO DATA — Routes are simulated, not live GPS tracking
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg">

@@ -1,5 +1,11 @@
 // ── Digital Twin Hierarchy Mock Data ──
 // City → Zone → Corridor → Road → Intersection → Signal
+//
+// Bengaluru data remains here for backward compatibility.
+// Delhi-NCR, Mumbai, Hyderabad data is in data/cityHierarchyData.ts.
+// Use getCityHierarchy(cityName) to get the right data for the selected city.
+//
+// All data is DEMO/MOCK — source: "MOCK", dataMode: "DEMO"
 
 // ──────────────────────────── ZONES ────────────────────────────
 export interface TwinZone {
@@ -221,4 +227,35 @@ export function getRoadById(id: string): TwinRoad | undefined {
 
 export function getIntersectionById(id: string): TwinIntersection | undefined {
   return TWIN_INTERSECTIONS.find((ix) => ix.id === id);
+}
+
+// ──────────────────────────── CITY PROVIDER ────────────────────────────
+// Returns the correct data arrays for any supported city.
+// Bengaluru returns the static arrays above; other cities return from cityHierarchyData.ts.
+
+import { getCityHierarchy, type CityHierarchy } from '../data/cityHierarchyData';
+
+/**
+ * Get the complete city hierarchy for the given city name.
+ * Falls back to Bengaluru data if the city is not found.
+ */
+export function getCityTwinData(cityName: string): {
+  zones: TwinZone[];
+  corridors: TwinCorridor[];
+  roads: TwinRoad[];
+  intersections: TwinIntersection[];
+  signals: TwinSignal[];
+} {
+  const hierarchy = getCityHierarchy(cityName);
+  if (hierarchy) {
+    return hierarchy;
+  }
+  // Fallback: Bengaluru (existing data)
+  return {
+    zones: TWIN_ZONES,
+    corridors: TWIN_CORRIDORS,
+    roads: TWIN_ROADS,
+    intersections: TWIN_INTERSECTIONS,
+    signals: TWIN_SIGNALS,
+  };
 }

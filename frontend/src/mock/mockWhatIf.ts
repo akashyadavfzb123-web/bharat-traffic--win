@@ -39,7 +39,7 @@ export const SCENARIO_TYPE_CONFIG: Record<ScenarioType, { label: string; icon: s
 };
 
 export const MOCK_CITIES = ['Bengaluru', 'Delhi-NCR', 'Mumbai', 'Hyderabad'];
-export const MOCK_ROADS = [
+export const MOCK_ROADS_BENGALURU = [
   'ORR South (Silk Board–Bellandur)',
   'Hosur Road Elevated',
   'MG Road CBD Corridor',
@@ -49,6 +49,44 @@ export const MOCK_ROADS = [
   'Koramangala 100ft Road',
   'Mysore Road Elevated',
 ];
+export const MOCK_ROADS_DELHI = [
+  'Ring Road (AIIMS – Dhaula Kuan)',
+  'Mathura Road (ITO – Badarpur)',
+  'Connaught Place – Janpath Circuit',
+  'NH-48 (Delhi-Gurgaon Expressway)',
+  'DND Flyway (Mayur Vihar – Noida)',
+  'Kashmere Gate – ISBT Corridor',
+  'Ashram Chowk – AIIMS Corridor',
+  'Anand Vihar – Akshardham Corridor',
+  'Karol Bagh – Rajouri Garden Link',
+  'Nelson Mandela Marg (Vasant Kunj)',
+];
+export const MOCK_ROADS_MUMBAI = [
+  'Western Express Highway',
+  'Bandra-Worli Sea Link',
+  'SCLR Flyover (BKC–Chembur)',
+  'SV Road (Andheri–Bandra)',
+];
+export const MOCK_ROADS_HYDERABAD = [
+  'HITECH City Main Arterial',
+  'Outer Ring Road (Gachibowli–Shamshabad)',
+  'MG Road – Abids Corridor',
+  'Necklace Road (Tank Bund)',
+];
+
+/** Get roads for a city name */
+export function getMockRoadsForCity(city: string): string[] {
+  switch (city) {
+    case 'Bengaluru': return MOCK_ROADS_BENGALURU;
+    case 'Delhi-NCR': return MOCK_ROADS_DELHI;
+    case 'Mumbai': return MOCK_ROADS_MUMBAI;
+    case 'Hyderabad': return MOCK_ROADS_HYDERABAD;
+    default: return MOCK_ROADS_BENGALURU;
+  }
+}
+
+// Backward compat: combined list for existing UI that doesn't filter by city
+export const MOCK_ROADS = [...MOCK_ROADS_BENGALURU, ...MOCK_ROADS_DELHI, ...MOCK_ROADS_MUMBAI, ...MOCK_ROADS_HYDERABAD];
 export const MOCK_DURATIONS = ['15 min', '30 min', '1 hour', '2 hours', '4 hours', 'Full day'];
 export const MOCK_SEVERITIES: SeverityLevel[] = ['low', 'medium', 'high', 'critical'];
 
@@ -59,6 +97,43 @@ export const BASE_METRICS: WhatIfMetrics = {
   throughput: 3200,
   congestion: 68,
 };
+
+// Delhi base metrics — DEMO/MOCK data for Delhi-NCR
+export const DELHI_BASE_METRICS: WhatIfMetrics = {
+  speed: 21,
+  waitTime: 165,
+  queue: 680,
+  throughput: 2800,
+  congestion: 72,
+};
+
+// Mumbai base metrics — DEMO/MOCK data
+export const MUMBAI_BASE_METRICS: WhatIfMetrics = {
+  speed: 18,
+  waitTime: 145,
+  queue: 580,
+  throughput: 3000,
+  congestion: 75,
+};
+
+// Hyderabad base metrics — DEMO/MOCK data
+export const HYDERABAD_BASE_METRICS: WhatIfMetrics = {
+  speed: 22,
+  waitTime: 110,
+  queue: 420,
+  throughput: 2600,
+  congestion: 65,
+};
+
+/** Get the base metrics for a given city */
+export function getBaseMetricsForCity(city: string): WhatIfMetrics {
+  switch (city) {
+    case 'Delhi-NCR': return DELHI_BASE_METRICS;
+    case 'Mumbai': return MUMBAI_BASE_METRICS;
+    case 'Hyderabad': return HYDERABAD_BASE_METRICS;
+    default: return BASE_METRICS;
+  }
+}
 
 // ── Pre-built completed simulations ──
 export const MOCK_COMPLETED_SIMULATIONS: WhatIfSimulation[] = [
@@ -128,24 +203,95 @@ export const MOCK_COMPLETED_SIMULATIONS: WhatIfSimulation[] = [
   },
 ];
 
+// ── Delhi-NCR Pre-built Simulations ──
+// DEMO/MOCK data — not live traffic results
+export const DELHI_COMPLETED_SIMULATIONS: WhatIfSimulation[] = [
+  {
+    id: 'del-sim-01',
+    type: 'accident',
+    name: 'Multi-vehicle Pile-up on Ring Road (AIIMS–Dhaula Kuan)',
+    city: 'Delhi-NCR',
+    road: 'Ring Road (AIIMS – Dhaula Kuan)',
+    duration: '1 hour',
+    trafficIncreasePct: 45,
+    severity: 'high',
+    before: { speed: 21, waitTime: 165, queue: 680, throughput: 2800, congestion: 72 },
+    after: { speed: 9, waitTime: 320, queue: 1450, throughput: 1400, congestion: 95 },
+    mitigation: 'Activate Ring Road detour via Outer Ring Road. Divert to Mathura Road. Deploy traffic police at AIIMS and Dhaula Kuan.',
+    status: 'completed',
+    affectedJunctions: 10,
+    estimatedRecoveryMin: 80,
+  },
+  {
+    id: 'del-sim-02',
+    type: 'heavy_rain',
+    name: 'Heavy Monsoon Rain — ITO Waterlogging (50mm/hr)',
+    city: 'Delhi-NCR',
+    road: 'Ring Road (AIIMS – Dhaula Kuan)',
+    duration: '2 hours',
+    trafficIncreasePct: 35,
+    severity: 'critical',
+    before: { speed: 21, waitTime: 165, queue: 680, throughput: 2800, congestion: 72 },
+    after: { speed: 12, waitTime: 280, queue: 1200, throughput: 1600, congestion: 91 },
+    mitigation: 'Activate Minto Bridge underpass pumps. Deploy PWD drainage teams. Reduce signal cycle lengths by 20%. Issue citizen mobility advisory.',
+    status: 'completed',
+    affectedJunctions: 18,
+    estimatedRecoveryMin: 120,
+  },
+  {
+    id: 'del-sim-03',
+    type: 'road_closure',
+    name: 'ITO Ring Road Segment — Emergency Repair Closure',
+    city: 'Delhi-NCR',
+    road: 'Ring Road (AIIMS – Dhaula Kuan)',
+    duration: '4 hours',
+    trafficIncreasePct: 60,
+    severity: 'critical',
+    before: { speed: 21, waitTime: 165, queue: 680, throughput: 2800, congestion: 72 },
+    after: { speed: 11, waitTime: 310, queue: 1600, throughput: 1500, congestion: 93 },
+    mitigation: 'Divert traffic via Mathura Road and Outer Ring Road. Deploy traffic police at 8 diversion points. Enable green wave on alternate corridors.',
+    status: 'completed',
+    affectedJunctions: 14,
+    estimatedRecoveryMin: 240,
+  },
+  {
+    id: 'del-sim-04',
+    type: 'vip_movement',
+    name: 'VIP Convoy — Rashtrapati Bhavan to Airport',
+    city: 'Delhi-NCR',
+    road: 'NH-48 (Delhi-Gurgaon Expressway)',
+    duration: '30 min',
+    trafficIncreasePct: 40,
+    severity: 'medium',
+    before: { speed: 21, waitTime: 165, queue: 680, throughput: 2800, congestion: 72 },
+    after: { speed: 15, waitTime: 220, queue: 920, throughput: 2200, congestion: 82 },
+    mitigation: 'Pre-emptive green wave on Rajpath → India Gate → Ring Road → NH-48 corridor. Deploy traffic police at 6 junctions. Close on-ramps temporarily.',
+    status: 'completed',
+    affectedJunctions: 8,
+    estimatedRecoveryMin: 30,
+  },
+];
+
 // ── Compute simulation results based on inputs ──
 export function computeSimulation(
   _type: ScenarioType,
   trafficIncrease: number,
-  severity: SeverityLevel
+  severity: SeverityLevel,
+  cityName?: string
 ): { before: WhatIfMetrics; after: WhatIfMetrics } {
+  const baseMetrics = cityName ? getBaseMetricsForCity(cityName) : BASE_METRICS;
   const severityMultiplier = { low: 0.5, medium: 0.75, high: 1.0, critical: 1.25 }[severity];
   const impact = (trafficIncrease / 100) * severityMultiplier;
 
   const after: WhatIfMetrics = {
-    speed: Math.max(3, Math.round((BASE_METRICS.speed * (1 - impact * 0.7)) * 10) / 10),
-    waitTime: Math.round(BASE_METRICS.waitTime * (1 + impact * 1.8)),
-    queue: Math.round(BASE_METRICS.queue * (1 + impact * 2.2)),
-    throughput: Math.round(BASE_METRICS.throughput * (1 - impact * 0.5)),
-    congestion: Math.min(99, Math.round(BASE_METRICS.congestion + impact * 35)),
+    speed: Math.max(3, Math.round((baseMetrics.speed * (1 - impact * 0.7)) * 10) / 10),
+    waitTime: Math.round(baseMetrics.waitTime * (1 + impact * 1.8)),
+    queue: Math.round(baseMetrics.queue * (1 + impact * 2.2)),
+    throughput: Math.round(baseMetrics.throughput * (1 - impact * 0.5)),
+    congestion: Math.min(99, Math.round(baseMetrics.congestion + impact * 35)),
   };
 
-  return { before: { ...BASE_METRICS }, after };
+  return { before: { ...baseMetrics }, after };
 }
 
 // ── Recovery timeline (mock 12-point curve) ──
