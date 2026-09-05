@@ -45,6 +45,7 @@ interface MapProps {
   selectedRouteId?: string | null;
   onRoadClick?: (road: RoadSegmentProperties) => void;
   onJunctionClick?: (junction: Junction) => void;
+  onTrafficFlowClick?: (props: { speed: number; freeFlowSpeed: number; jamFactor: number; confidence: number; trafficLevel: string; roadName: string; updated: string; source: string; lat: number; lng: number }) => void;
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
@@ -139,6 +140,7 @@ export const MapContainer: React.FC<MapProps> = ({
   greenCorridors = [],
   onRoadClick,
   onJunctionClick,
+  onTrafficFlowClick,
   center,
   zoom = 12,
   interactive = true,
@@ -177,8 +179,10 @@ export const MapContainer: React.FC<MapProps> = ({
   // Refs that hold the latest props for use in callbacks without re-creating the map
   const onRoadClickRef = useRef(onRoadClick);
   const onJunctionClickRef = useRef(onJunctionClick);
+  const onTrafficFlowClickRef = useRef(onTrafficFlowClick);
   useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
   useEffect(() => { onJunctionClickRef.current = onJunctionClick; }, [onJunctionClick]);
+  useEffect(() => { onTrafficFlowClickRef.current = onTrafficFlowClick; }, [onTrafficFlowClick]);
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
@@ -380,14 +384,13 @@ export const MapContainer: React.FC<MapProps> = ({
     addRouteLayers(map, routes);
   }, [routes, selectedRouteId]);
 
-  // Update traffic flow overlay (HERE real-time or synthetic)
+  // Update traffic flow overlay (HERE real-time or synthetic) — works in all modes
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    if (!hideAdminOverlays) return;
     trafficFlowRef.current = trafficFlowGeoJSON ?? null;
     addTrafficFlowLayer(map, trafficFlowGeoJSON);
-  }, [trafficFlowGeoJSON, hideAdminOverlays]);
+  }, [trafficFlowGeoJSON]);
 
   // Auto-fit map bounds to selected route (user route planner mode)
   useEffect(() => {
@@ -560,6 +563,22 @@ export const MapContainer: React.FC<MapProps> = ({
             .setLngLat(coords)
             .setHTML(popupHtml)
             .addTo(map);
+        }
+        // Callback for parent components (e.g., LiveTraffic command center)
+        if (onTrafficFlowClickRef.current) {
+          const point = e.lngLat;
+          onTrafficFlowClickRef.current({
+            speed: p.speed ?? 0,
+            freeFlowSpeed: p.freeFlowSpeed ?? 0,
+            jamFactor: p.jamFactor ?? 0,
+            confidence: p.confidence ?? 0,
+            trafficLevel: p.trafficLevel ?? 'unknown',
+            roadName: p.roadName ?? 'Unknown Road',
+            updated: p.updated ?? '',
+            source: p.source ?? 'HERE',
+            lat: point.lat,
+            lng: point.lng,
+          });
         }
       }
     });
@@ -1054,17 +1073,22 @@ export const MapContainer: React.FC<MapProps> = ({
               )}
             </div>
           )}
-          <div className="flex items-center gap-2 pt-1">
+          <div className="font-bold text-slate-500 text-[9px] uppercase pt-1">TRAFFIC LEGEND</div>
+          <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
-            <span>Clear Flow (&gt;40 km/h)</span>
+            <span>🟢 Clear Flow</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
-            <span>Slow Traffic (20-40 km/h)</span>
+            <span>🟡 Slow Traffic</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-red-500 inline-block rounded" />
-            <span>Heavy Gridlock (&lt;20 km/h)</span>
+            <span>🔴 Heavy Gridlock</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-1 bg-slate-500 inline-block rounded" />
+            <span>⚪ No Data</span>
           </div>
           {greenCorridors.some(c => c.status === 'active') && (
             <>
