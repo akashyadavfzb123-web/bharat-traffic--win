@@ -7,8 +7,6 @@ import type { SyntheticCamera, SyntheticSensor, SyntheticBusStop, SyntheticMetro
 import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
-// NOTE: fetchRoadGeometry removed — overpass-api.de is blocked in production.
-// Road geometry is served from local cityData GeoJSON instead.
 import { useApp } from '../../context/AppContext';
 import {
   Layers,
@@ -176,6 +174,7 @@ export const MapContainer: React.FC<MapProps> = ({
   const [showStyleMenu, setShowStyleMenu] = useState(false);
   const [showCityMenu, setShowCityMenu] = useState(false);
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+  const prevStyleRef = useRef<MapStyleType>(currentStyle);
 
   // Refs that hold the latest props for use in callbacks without re-creating the map
   const onRoadClickRef = useRef(onRoadClick);
@@ -326,9 +325,13 @@ export const MapContainer: React.FC<MapProps> = ({
   // ── Imperative updates when props change (no map recreation) ──
 
   // Update tile style — re-add layers after the new style finishes loading
+  // Skip the initial render since the map is already created with the correct style
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    // Skip if style hasn't actually changed from the initial value
+    if (prevStyleRef.current === currentStyle) return;
+    prevStyleRef.current = currentStyle;
     isMapLoadedRef.current = false;
     map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
     // Wait for the new style to load before re-adding custom layers
