@@ -47,6 +47,8 @@ function isTokenExpiringSoon(token: string, ms = 5 * 60 * 1000): boolean {
 // ── Silent refresh logic ─────────────────────────────────────────────
 
 let refreshPromise: Promise<string> | null = null;
+let refreshCooldownUntil = 0;
+const REFRESH_COOLDOWN_MS = 30_000; // Don't retry refresh more than once per 30s on failure
 
 /**
  * Silently request a new JWT from /auth/refresh.
@@ -56,6 +58,9 @@ let refreshPromise: Promise<string> | null = null;
 async function silentRefresh(): Promise<string> {
   const currentToken = localStorage.getItem('bharat_traffic_token');
   if (!currentToken) throw new Error('No token to refresh');
+
+  // Cooldown after a failed refresh — prevents hammering a dead backend
+  if (Date.now() < refreshCooldownUntil) throw new Error('Refresh on cooldown');
 
   if (refreshPromise) return refreshPromise;
 
@@ -87,6 +92,9 @@ async function silentRefresh(): Promise<string> {
       }
 
       return newToken;
+    } catch (err) {
+      refreshCooldownUntil = Date.now() + REFRESH_COOLDOWN_MS;
+      throw err;
     } finally {
       refreshPromise = null;
     }
