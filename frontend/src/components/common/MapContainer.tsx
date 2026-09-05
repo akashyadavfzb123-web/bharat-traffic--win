@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Junction, Incident, RouteOption, DigitalTwinNode } from '../../types/traffic';
 import type { RoadGeoJSONCollection, RoadSegmentProperties } from '../../data/mockGeoJSON';
 import type { SyntheticCamera, SyntheticSensor, SyntheticBusStop, SyntheticMetroStation } from '../../types/synthetic';
+import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
 import { fetchRoadGeometry } from '../../services/roadGeometryService';
@@ -49,6 +50,8 @@ interface MapProps {
   interactive?: boolean;
   /** Hide admin-specific overlays (junctions, vehicles, cameras, sensors, transit) for user-only maps */
   hideAdminOverlays?: boolean;
+  /** Real-time traffic flow GeoJSON from HERE Traffic v7 (or synthetic fallback) */
+  trafficFlowGeoJSON?: TrafficFlowGeoJSON | null;
   /** Synthetic data objects from SyntheticTrafficProvider */
   cameras?: SyntheticCamera[];
   sensors?: SyntheticSensor[];
@@ -140,6 +143,7 @@ export const MapContainer: React.FC<MapProps> = ({
   zoom = 12,
   interactive = true,
   hideAdminOverlays = false,
+  trafficFlowGeoJSON,
   cameras = [],
   sensors = [],
   busStops = [],
@@ -160,6 +164,7 @@ export const MapContainer: React.FC<MapProps> = ({
   const metroMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
   const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
   const searchMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const trafficFlowRef = useRef<TrafficFlowGeoJSON | null>(trafficFlowGeoJSON ?? null);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [searchQuery, setSearchQuery] = useState('');
@@ -375,6 +380,15 @@ export const MapContainer: React.FC<MapProps> = ({
     addRouteLayers(map, routes);
   }, [routes, selectedRouteId]);
 
+  // Update traffic flow overlay (HERE real-time or synthetic)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (!hideAdminOverlays) return;
+    trafficFlowRef.current = trafficFlowGeoJSON ?? null;
+    addTrafficFlowLayer(map, trafficFlowGeoJSON);
+  }, [trafficFlowGeoJSON, hideAdminOverlays]);
+
   // Auto-fit map bounds to selected route (user route planner mode)
   useEffect(() => {
     if (!hideAdminOverlays) return;
@@ -464,6 +478,97 @@ export const MapContainer: React.FC<MapProps> = ({
           'line-opacity': selectedRouteId ? (isSelected ? 1.0 : 0.35) : 0.85,
         },
       });
+    });
+  }
+
+  function addTrafficFlowLayer(map: maplibregl.Map, flowData: TrafficFlowGeoJSON | null | undefined) {
+    // Remove existing traffic flow layers
+    ['traffic-flow-glow', 'traffic-flow-line'].forEach((id) => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    });
+    if (map.getSource('traffic-flow-src')) map.removeSource('traffic-flow-src');
+
+    if (!flowData || !flowData.features || flowData.features.length === 0) return;
+
+    map.addSource('traffic-flow-src', {
+      type: 'geojson',
+      data: flowData as unknown as string,
+    });
+
+    // Wide glow underlay
+    map.addLayer({
+      id: 'traffic-flow-glow',
+      type: 'line',
+      source: 'traffic-flow-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': [
+          'match',
+          ['get', 'trafficLevel'],
+          'smooth', '#22c55e',
+          'moderate', '#eab308',
+          'heavy', '#f97316',
+          'severe', '#ef4444',
+          '#94a3b8',
+        ],
+        'line-width': 12,
+        'line-opacity': 0.18,
+        'line-blur': 6,
+      },
+    });
+
+    // Main traffic flow lines — colored by traffic level on the actual road geometry
+    map.addLayer({
+      id: 'traffic-flow-line',
+      type: 'line',
+      source: 'traffic-flow-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': [
+          'match',
+          ['get', 'trafficLevel'],
+          'smooth', '#22c55e',
+          'moderate', '#eab308',
+          'heavy', '#f97316',
+          'severe', '#ef4444',
+          '#94a3b8',
+        ],
+        'line-width': 5,
+        'line-opacity': 0.88,
+      },
+    });
+
+    // Click handler for traffic flow segments
+    map.on('click', 'traffic-flow-line', (e) => {
+      if (e.features && e.features.length > 0) {
+        const p = e.features[0].properties as any;
+        const coords = (e.features[0].geometry as any)?.coordinates?.[0];
+        const popupHtml = `
+          <div style="font-family: monospace; padding: 6px; min-width: 180px;">
+            <div style="font-weight: bold; color: #38bdf8; font-size: 12px; margin-bottom: 4px;">${p.roadName || 'Road Segment'}</div>
+            <div style="font-size: 11px; color: #f8fafc;">
+              <div>Speed: <strong>${p.speed ?? '—'} km/h</strong> (free-flow: ${p.freeFlowSpeed ?? '—'})</div>
+              <div>Jam Factor: <strong>${p.jamFactor ?? '—'}</strong></div>
+              <div>Confidence: <strong>${p.confidence ?? '—'}</strong></div>
+              ${p.updated ? `<div>Last Updated: <strong>${p.updated}</strong></div>` : ''}
+              <div style="margin-top: 4px; color: #22c55e; font-weight: bold;">Source: ${p.source ?? 'HERE'}</div>
+            </div>
+          </div>
+        `;
+        if (coords) {
+          new maplibregl.Popup({ offset: 15 })
+            .setLngLat(coords)
+            .setHTML(popupHtml)
+            .addTo(map);
+        }
+      }
+    });
+
+    map.on('mouseenter', 'traffic-flow-line', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'traffic-flow-line', () => {
+      map.getCanvas().style.cursor = '';
     });
   }
 
@@ -939,6 +1044,16 @@ export const MapContainer: React.FC<MapProps> = ({
             <span>{selectedCity} Live Network</span>
             <span className="text-cyan-400 text-[9px]">MapLibre Active</span>
           </div>
+          {trafficFlowRef.current?.meta?.source && (
+            <div className={`text-[9px] font-bold uppercase ${
+              trafficFlowRef.current.meta.source === 'HERE' ? 'text-emerald-400' : 'text-amber-400'
+            }`}>
+              {trafficFlowRef.current.meta.source === 'HERE' ? '● REAL TRAFFIC / HERE' : '● DEMO / SYNTHETIC'}
+              {trafficFlowRef.current.meta.label && (
+                <span className="text-slate-500 ml-1">({trafficFlowRef.current.meta.label})</span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
             <span>Clear Flow (&gt;40 km/h)</span>

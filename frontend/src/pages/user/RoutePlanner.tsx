@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import type { RouteOption } from '../../types/traffic';
+import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
 import { MapContainer } from '../../components/common/MapContainer';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
@@ -8,6 +9,7 @@ import { useApp } from '../../context/AppContext';
 import { CITIES } from '../../data/cityData';
 import { generateRoutes, routeScore } from '../../utils/routeGenerator';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
+import { fetchHereRoutes, fetchTrafficFlow, expandBounds, boundsFromCoordinates } from '../../services/hereTrafficApi';
 import {
   Navigation,
   MapPin,
@@ -32,7 +34,10 @@ export const UserRoutePlanner: React.FC = () => {
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
   const [calculating, setCalculating] = useState(false);
   const [geocodingError, setGeocodingError] = useState<string | null>(null);
-  const [routingSource, setRoutingSource] = useState<'osrm' | 'mock' | null>(null);
+  const [routingSource, setRoutingSource] = useState<'here' | 'osrm' | 'mock' | null>(null);
+  const [trafficFlow, setTrafficFlow] = useState<TrafficFlowGeoJSON | null>(null);
+  const [trafficSource, setTrafficSource] = useState<string | null>(null);
+  const flowTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Autocomplete state for From/To search fields
   const [fromSuggestions, setFromSuggestions] = useState<SearchResult[]>([]);
@@ -76,32 +81,63 @@ export const UserRoutePlanner: React.FC = () => {
           parseFloat(destResults[0].lat),
         ];
 
-        // Generate 3 routes (OSRM real routing, with mock fallback)
+        // Route via HERE (backend proxy) → OSRM → mock fallback
         let generated: Awaited<ReturnType<typeof generateRoutes>>;
-        let source: 'osrm' | 'mock' = 'mock';
+        let source: 'here' | 'osrm' | 'mock' = 'mock';
         try {
-          // Attempt real OSRM routing
-          const { fetchOSRMRoutes } = await import('../../services/routingApi');
-          generated = await fetchOSRMRoutes({
-            origin: originCoords,
-            destination: destCoords,
+          // Attempt HERE routing via backend
+          const result = await fetchHereRoutes({
+            originLat: originCoords[1],
+            originLng: originCoords[0],
+            destLat: destCoords[1],
+            destLng: destCoords[0],
             originName: origin,
             destinationName: destination,
-            city: selectedCity,
           });
-          source = 'osrm';
+          generated = result.routes;
+          source = 'here';
         } catch {
-          // OSRM unavailable — use mock fallback
-          generated = await generateRoutes({
-            origin: originCoords,
-            destination: destCoords,
-            originName: origin,
-            destinationName: destination,
-            city: selectedCity,
-          });
-          source = 'mock';
+          // HERE unavailable — try OSRM
+          try {
+            const { fetchOSRMRoutes } = await import('../../services/routingApi');
+            generated = await fetchOSRMRoutes({
+              origin: originCoords,
+              destination: destCoords,
+              originName: origin,
+              destinationName: destination,
+              city: selectedCity,
+            });
+            source = 'osrm';
+          } catch {
+            // Both unavailable — use mock fallback
+            generated = await generateRoutes({
+              origin: originCoords,
+              destination: destCoords,
+              originName: origin,
+              destinationName: destination,
+              city: selectedCity,
+            });
+            source = 'mock';
+          }
         }
         setRoutingSource(source);
+
+        // Fetch HERE traffic flow for the route corridor
+        try {
+          const allCoords = generated.flatMap((r) => r.coordinates);
+          if (allCoords.length > 0) {
+            const bounds = boundsFromCoordinates(allCoords);
+            if (bounds) {
+              const expanded = expandBounds(bounds, 0.3);
+              const flow = await fetchTrafficFlow(expanded);
+              setTrafficFlow(flow);
+              setTrafficSource(flow.meta.source);
+            }
+          }
+        } catch {
+          // Traffic flow fetch failed — show routes only
+          setTrafficFlow(null);
+        }
 
         // Find best route (lowest score = best ETA + congestion combo)
         let bestIdx = 0;
@@ -135,9 +171,34 @@ export const UserRoutePlanner: React.FC = () => {
   useEffect(() => {
     setFromLocation(cityConfig.defaultOrigin);
     setToLocation(cityConfig.defaultDestination);
+    setTrafficFlow(null);
+    setTrafficSource(null);
     // Auto-calculate for the new city's defaults
     calculateRoutes(cityConfig.defaultOrigin, cityConfig.defaultDestination);
   }, [selectedCity, cityConfig, calculateRoutes]);
+
+  // ── Periodic traffic flow refresh (every 60 seconds) ──────────────
+  useEffect(() => {
+    const refreshTrafficFlow = async () => {
+      if (!selectedRoute?.coordinates || selectedRoute.coordinates.length < 2) return;
+      try {
+        const bounds = boundsFromCoordinates(selectedRoute.coordinates);
+        if (bounds) {
+          const expanded = expandBounds(bounds, 0.3);
+          const flow = await fetchTrafficFlow(expanded);
+          setTrafficFlow(flow);
+          setTrafficSource(flow.meta.source);
+        }
+      } catch {
+        // Silently ignore refresh failures
+      }
+    };
+
+    flowTimerRef.current = setInterval(refreshTrafficFlow, 60000);
+    return () => {
+      if (flowTimerRef.current) clearInterval(flowTimerRef.current);
+    };
+  }, [selectedRoute?.id]);
 
   // ── Autocomplete search for From field ────────────────────────────
   useEffect(() => {
@@ -202,8 +263,13 @@ export const UserRoutePlanner: React.FC = () => {
             AI ROUTING MATRIX
           </Badge>
           {routingSource && (
-            <Badge color={routingSource === 'osrm' ? 'emerald' : 'amber'}>
-              {routingSource === 'osrm' ? '● OSRM LIVE ROUTING' : '● MOCK ROUTING'}
+            <Badge color={routingSource === 'here' ? 'emerald' : routingSource === 'osrm' ? 'cyan' : 'amber'}>
+              {routingSource === 'here' ? '● REAL TRAFFIC / HERE' : routingSource === 'osrm' ? '● OSRM LIVE ROUTING' : '● DEMO / SYNTHETIC'}
+            </Badge>
+          )}
+          {trafficSource && trafficSource === 'HERE' && (
+            <Badge color="emerald" dot>
+              REAL TRAFFIC DATA
             </Badge>
           )}
         </div>
@@ -547,6 +613,7 @@ export const UserRoutePlanner: React.FC = () => {
             <MapContainer
               routes={routes}
               selectedRouteId={selectedRoute?.id ?? null}
+              trafficFlowGeoJSON={trafficFlow}
               hideAdminOverlays
             />
           </div>

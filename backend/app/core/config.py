@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     WS_BROADCAST_INTERVAL: float = 3.0  # seconds between WebSocket broadcasts
 
+    # HERE Maps API keys (traffic + routing)
+    HERE_API_KEY: str = ""
+    HERE_API_KEY_V8: str = ""  # routing v8 key (can be same as HERE_API_KEY)
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @field_validator("CORS_ORIGINS", mode="before")
