@@ -185,7 +185,7 @@ export const AdminDigitalTwin: React.FC = () => {
         <div>
           <h2 className="text-lg font-black text-slate-100 font-mono flex items-center gap-2">
             <Cpu className="w-5 h-5 text-cyan-400" />
-            DIGITAL TWIN — BHARAT TRAFFIC TWIN
+            DIGITAL TWIN — BHARAT TRAFFIC
           </h2>
           <p className="text-[11px] text-slate-400">
             Microscopic network simulation — City → Zone → Corridor → Road → Intersection → Signal

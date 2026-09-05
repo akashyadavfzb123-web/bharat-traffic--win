@@ -74,7 +74,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onMobileMenuToggle }) => {
                 ? 'bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-200'
                 : 'bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-200'
             }`}>
-              BHARAT TRAFFIC TWIN
+              BHARAT TRAFFIC
             </h1>
             <span className={`hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-bold rounded border ${
               isAdmin

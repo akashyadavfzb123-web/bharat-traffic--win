@@ -105,7 +105,7 @@ export const Register: React.FC = () => {
             </div>
           </div>
           <span className="text-sm font-extrabold tracking-wide bg-gradient-to-r from-cyan-400 to-emerald-400 bg-clip-text text-transparent font-mono">
-            BHARAT TRAFFIC TWIN
+            BHARAT TRAFFIC
           </span>
         </div>
         <h1 className="text-2xl font-black text-slate-100 tracking-tight">

@@ -151,7 +151,7 @@ export const AdminLayout: React.FC = () => {
         <main className="flex-1 overflow-y-auto bg-slate-950 p-4 md:p-6 lg:p-8">
           {/* Page Header — command center style */}
           <div className="mb-4 flex items-center gap-2 text-[10px] font-mono text-slate-500">
-            <span className="text-emerald-500">BTT</span>
+            <span className="text-emerald-500">BT</span>
             <span>/</span>
             <span className="text-emerald-400">admin</span>
             <span>/</span>
