@@ -30,7 +30,6 @@ import { AdminAnalytics } from '../pages/admin/Analytics';
 import { AdminReports } from '../pages/admin/Reports';
 import { AdminCityManagement } from '../pages/admin/CityManagement';
 import { AdminSettings } from '../pages/admin/Settings';
-import { AdminJudgeQA } from '../pages/admin/JudgeQA';
 
 export const AppRoutes: React.FC = () => {
   return (
@@ -73,7 +72,6 @@ export const AppRoutes: React.FC = () => {
           <Route path="/admin/reports" element={<AdminReports />} />
           <Route path="/admin/cities" element={<AdminCityManagement />} />
           <Route path="/admin/city-management" element={<Navigate to="/admin/cities" replace />} />
-          <Route path="/admin/judge-qa" element={<AdminJudgeQA />} />
           <Route path="/admin/settings" element={<AdminSettings />} />
         </Route>
 
