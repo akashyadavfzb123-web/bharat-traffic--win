@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
+from app.api.here_routing import router as here_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.digital_twin import router as digital_twin_router
@@ -47,6 +48,7 @@ app.add_middleware(
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(Exception, unhandled_error_handler)
 
+app.include_router(here_router)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(admin_router)

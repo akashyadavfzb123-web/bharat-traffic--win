@@ -1,17 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   MOCK_COMPLETED_SIMULATIONS,
+  DELHI_COMPLETED_SIMULATIONS,
   MOCK_CITIES,
-  MOCK_ROADS,
   MOCK_DURATIONS,
   SCENARIO_TYPE_CONFIG,
   computeSimulation,
   getRecoveryTimeline,
+  getMockRoadsForCity,
   type ScenarioType,
   type SeverityLevel,
   type WhatIfSimulation,
 } from '../../mock/mockWhatIf';
 import { useToast } from '../../context/ToastContext';
+import { useApp } from '../../context/AppContext';
 import {
   GitPullRequest,
   Play,
@@ -54,13 +56,18 @@ const METRIC_LABELS = [
 
 export const AdminWhatIfScenarios: React.FC = () => {
   const { addToast } = useToast();
-  const [simulations, setSimulations] = useState<WhatIfSimulation[]>(MOCK_COMPLETED_SIMULATIONS);
+  const [simulations, setSimulations] = useState<WhatIfSimulation[]>([...DELHI_COMPLETED_SIMULATIONS, ...MOCK_COMPLETED_SIMULATIONS]);
   const [activeResult, setActiveResult] = useState<WhatIfSimulation | null>(null);
+
+  const { selectedCity } = useApp();
+
+  // Roads for selected city
+  const cityRoads = useMemo(() => getMockRoadsForCity(selectedCity), [selectedCity]);
 
   // Form state
   const [formType, setFormType] = useState<ScenarioType>('accident');
   const [formCity, setFormCity] = useState('Bengaluru');
-  const [formRoad, setFormRoad] = useState(MOCK_ROADS[0]);
+  const [formRoad, setFormRoad] = useState(cityRoads[0]);
   const [formDuration, setFormDuration] = useState('1 hour');
   const [formTrafficIncrease, setFormTrafficIncrease] = useState(45);
   const [formSeverity, setFormSeverity] = useState<SeverityLevel>('high');
@@ -76,7 +83,7 @@ export const AdminWhatIfScenarios: React.FC = () => {
     });
 
     setTimeout(() => {
-      const { before, after } = computeSimulation(formType, formTrafficIncrease, formSeverity);
+      const { before, after } = computeSimulation(formType, formTrafficIncrease, formSeverity, formCity);
       const newSim: WhatIfSimulation = {
         id: `sim-${Date.now()}`,
         type: formType,
@@ -121,6 +128,9 @@ export const AdminWhatIfScenarios: React.FC = () => {
           <p className="text-[11px] text-slate-400">
             Scenario builder — configure events, run simulations, and analyze before/after impact.
           </p>
+          <span className="inline-block mt-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono font-bold text-amber-400">
+            DEMO DATA — Simulation results are estimated, not real-time traffic
+          </span>
         </div>
         <div className="text-[10px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
           {completedCount} simulations completed
@@ -168,7 +178,7 @@ export const AdminWhatIfScenarios: React.FC = () => {
             <div>
               <label className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block mb-1">Road / Corridor</label>
               <select value={formRoad} onChange={(e) => setFormRoad(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500">
-                {MOCK_ROADS.map((r) => <option key={r} value={r} className="bg-slate-900">{r}</option>)}
+                {cityRoads.map((r) => <option key={r} value={r} className="bg-slate-900">{r}</option>)}
               </select>
             </div>
             <div>

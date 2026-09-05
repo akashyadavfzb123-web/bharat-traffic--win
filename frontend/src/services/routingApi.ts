@@ -1,5 +1,7 @@
 import axios from 'axios';
 import type { RouteOption, CongestionLevel } from '../types/traffic';
+import { fetchHereRoutes, type HereRouteParams } from './hereTrafficApi';
+import apiClient from './apiClient';
 
 // ── OSRM public demo server (no key required) ──────────────────────────────
 
@@ -149,11 +151,30 @@ export async function fetchOSRMRoutes(
 }
 
 /**
+ * Check if HERE routing is available via backend.
+ */
+export async function checkHEREHealth(): Promise<boolean> {
+  try {
+    const resp = await apiClient.get('/here/routes', {
+      params: {
+        origin_lat: 12.9716,
+        origin_lng: 77.5946,
+        dest_lat: 12.9800,
+        dest_lng: 77.6000,
+      },
+      timeout: 8000,
+    });
+    return resp.status === 200 && resp.data?.source === 'HERE';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if OSRM is reachable (quick ping).
  */
 export async function checkOSRMHealth(): Promise<boolean> {
   try {
-    // Ping with a trivial request to see if OSRM is up
     const resp = await axios.get(
       `${OSRM_BASE}/route/v1/driving/77.5946,12.9716;77.6000,12.9800`,
       { params: { overview: 'false' }, timeout: 5000 },
@@ -162,4 +183,44 @@ export async function checkOSRMHealth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ── HERE routing (via backend proxy) ────────────────────────────────────────
+
+/**
+ * Primary routing function: tries HERE first, falls back to OSRM.
+ * Falls back to mock generation if neither is available.
+ *
+ * @param params  Origin/destination info
+ * @returns       RouteOption[] with HERE traffic-aware ETA when available
+ */
+export async function fetchRoutingRoutes(
+  params: OSRMRouteParams,
+  alternatives: number = 2,
+): Promise<RouteOption[]> {
+  // 1. Try HERE routing via backend
+  try {
+    const hereParams: HereRouteParams = {
+      originLat: params.origin[1],
+      originLng: params.origin[0],
+      destLat: params.destination[1],
+      destLng: params.destination[0],
+      originName: params.originName,
+      destinationName: params.destinationName,
+      alternatives,
+    };
+    const result = await fetchHereRoutes(hereParams);
+    if (result.routes.length > 0) return result.routes;
+  } catch {
+    // HERE unavailable, try OSRM
+  }
+
+  // 2. Try OSRM
+  try {
+    return await fetchOSRMRoutes(params, alternatives);
+  } catch {
+    // Both unavailable
+  }
+
+  throw new Error('No routing provider available');
 }

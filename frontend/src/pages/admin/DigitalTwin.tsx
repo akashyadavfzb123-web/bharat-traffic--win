@@ -1,10 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from '../../context/ToastContext';
+import { useApp } from '../../context/AppContext';
 import {
-  TWIN_ZONES,
-  TWIN_CORRIDORS,
-  TWIN_ROADS,
-  TWIN_INTERSECTIONS,
   getCorridorsForZone,
   getRoadsForCorridor,
   getIntersectionsForRoad,
@@ -12,6 +9,7 @@ import {
   getZoneById,
   getCorridorById,
   getRoadById,
+  getCityTwinData,
   type TwinZone,
   type TwinCorridor,
   type TwinRoad,
@@ -62,8 +60,7 @@ interface DrillState {
   intersectionId?: string;
 }
 
-const LEVEL_LABELS: Record<DrillLevel, string> = {
-  city: 'Bengaluru',
+const STATIC_LEVEL_LABELS: Record<Exclude<DrillLevel, 'city'>, string> = {
   zone: 'Zone',
   corridor: 'Corridor',
   road: 'Road',
@@ -79,7 +76,13 @@ const STATUS_COLORS: Record<string, string> = {
 
 export const AdminDigitalTwin: React.FC = () => {
   const { addToast } = useToast();
+  const { selectedCity } = useApp();
   const [drill, setDrill] = useState<DrillState>({ level: 'city' });
+
+  // ── City-specific data from provider (DEMO/MOCK) ──
+  const cityData = useMemo(() => getCityTwinData(selectedCity), [selectedCity]);
+  const { zones: TWIN_ZONES, corridors: TWIN_CORRIDORS, roads: TWIN_ROADS, intersections: TWIN_INTERSECTIONS } = cityData;
+
   // Derived data for current drill level
   const currentZone = drill.zoneId ? getZoneById(drill.zoneId) : null;
   const currentCorridor = drill.corridorId ? getCorridorById(drill.corridorId) : null;
@@ -147,13 +150,13 @@ export const AdminDigitalTwin: React.FC = () => {
   // Chart data: speed comparison (actual vs simulated)
   const speedComparison = useMemo(() => {
     if (drill.level === 'city') {
-      return TWIN_ZONES.map((z) => ({ name: z.name.replace(' Bengaluru', ''), actual: z.avgSpeed, simulated: z.avgSpeed + Math.round(Math.random() * 8 - 2), congestion: z.avgCongestion }));
+      return TWIN_ZONES.map((z, i) => ({ name: z.name.replace(/ .+$/, ''), actual: z.avgSpeed, simulated: z.avgSpeed + [2, 3, 1, 4, 2, 3][i % 6], congestion: z.avgCongestion }));
     }
     if (drill.level === 'zone' && currentZone) {
-      return corridors.map((c) => ({ name: c.name.split(' ')[0], actual: c.avgSpeed, simulated: c.avgSpeed + Math.round(Math.random() * 6 - 1), congestion: c.avgCongestion }));
+      return corridors.map((c, i) => ({ name: c.name.split(' ')[0], actual: c.avgSpeed, simulated: c.avgSpeed + [2, 3, 1, 4, 2][i % 5], congestion: c.avgCongestion }));
     }
     if (drill.level === 'corridor' && currentCorridor) {
-      return roads.map((r) => ({ name: r.name.split('→')[0].trim().slice(0, 12), actual: r.avgSpeed, simulated: r.avgSpeed + Math.round(Math.random() * 5 - 1), congestion: r.congestion }));
+      return roads.map((r, i) => ({ name: r.name.split('→')[0].trim().slice(0, 12), actual: r.avgSpeed, simulated: r.avgSpeed + [2, 3, 1, 2, 3][i % 5], congestion: r.congestion }));
     }
     return [];
   }, [drill, corridors, roads, currentZone, currentCorridor]);
@@ -187,6 +190,9 @@ export const AdminDigitalTwin: React.FC = () => {
           <p className="text-[11px] text-slate-400">
             Microscopic network simulation — City → Zone → Corridor → Road → Intersection → Signal
           </p>
+          <span className="inline-block mt-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono font-bold text-amber-400">
+            DEMO DATA — source: MOCK
+          </span>
         </div>
         <button
           onClick={handleRefresh}
@@ -200,7 +206,7 @@ export const AdminDigitalTwin: React.FC = () => {
       {/* ── Breadcrumb ── */}
       <div className="flex items-center gap-1.5 text-[11px] font-mono flex-wrap">
         <button onClick={() => navigateTo('city')} className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 transition-colors">
-          <Home className="w-3 h-3" /> Bengaluru
+          <Home className="w-3 h-3" /> {selectedCity}
         </button>
         {drill.zoneId && (
           <>
@@ -251,7 +257,7 @@ export const AdminDigitalTwin: React.FC = () => {
           <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
               <Layers className="w-3.5 h-3.5 text-cyan-400" />
-              {LEVEL_LABELS[drill.level]} {drill.level !== 'intersection' ? '— Children' : '— Signal State'}
+              {drill.level === 'city' ? selectedCity : STATIC_LEVEL_LABELS[drill.level]} {drill.level !== 'intersection' ? '— Children' : '— Signal State'}
             </h3>
             <span className="text-[10px] font-mono text-slate-500">
               {drill.level === 'city' ? `${zones.length} zones` :

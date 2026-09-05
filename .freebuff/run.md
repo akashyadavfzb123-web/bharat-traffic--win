@@ -1,25 +1,13 @@
-# Run Doc — Bharat Traffic Twin Frontend Preview
-
-## Prerequisites
-- Backend running on port 8000 (`cd backend && source venv/bin/activate && uvicorn app.main:app --port 8000`)
-- PostgreSQL connected (DATABASE_URL in `backend/.env`)
+# Bharat Traffic Twin — Preview Run Doc
 
 ## How to reproduce artifacts
-1. Frontend dependencies already installed in `frontend/node_modules/`
-2. Use `frontend/.env` for environment variables
+- `frontend/node_modules/` already present in the worktree. If missing: `cd frontend && npm install`
+- No `.env.local` needed — the app uses only client-side mock data.
 
 ## How to run the server
 ```bash
-cd frontend
-npm run dev -- --port 5174
+cd frontend && npx vite --port 5174 --host
 ```
-Vite proxies `/api` requests to `http://localhost:8000` via the proxy config in `vite.config.ts`.
-
-## Environment
-- Frontend: http://localhost:5174
-- Backend: http://localhost:8000
-- API base: http://localhost:8000/api
-
-## Preview
-- Port: 5174
-- URL: http://localhost:5174
+- Logs to `.freebuff/preview-<uuid>.log`
+- Default port 5173 may be occupied; use 5174.
+- Backend proxy targets localhost:8000 (backend not needed for this demo — all data is mock).

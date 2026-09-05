@@ -4,9 +4,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Junction, Incident, RouteOption, DigitalTwinNode } from '../../types/traffic';
 import type { RoadGeoJSONCollection, RoadSegmentProperties } from '../../data/mockGeoJSON';
 import type { SyntheticCamera, SyntheticSensor, SyntheticBusStop, SyntheticMetroStation } from '../../types/synthetic';
+import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
-import { fetchRoadGeometry } from '../../services/roadGeometryService';
 import { useApp } from '../../context/AppContext';
 import {
   Layers,
@@ -44,11 +44,14 @@ interface MapProps {
   selectedRouteId?: string | null;
   onRoadClick?: (road: RoadSegmentProperties) => void;
   onJunctionClick?: (junction: Junction) => void;
+  onTrafficFlowClick?: (props: { speed: number; freeFlowSpeed: number; jamFactor: number; confidence: number; trafficLevel: string; roadName: string; updated: string; source: string; lat: number; lng: number }) => void;
   center?: [number, number]; // [lng, lat]
   zoom?: number;
   interactive?: boolean;
   /** Hide admin-specific overlays (junctions, vehicles, cameras, sensors, transit) for user-only maps */
   hideAdminOverlays?: boolean;
+  /** Real-time traffic flow GeoJSON from HERE Traffic v7 (or synthetic fallback) */
+  trafficFlowGeoJSON?: TrafficFlowGeoJSON | null;
   /** Synthetic data objects from SyntheticTrafficProvider */
   cameras?: SyntheticCamera[];
   sensors?: SyntheticSensor[];
@@ -136,10 +139,12 @@ export const MapContainer: React.FC<MapProps> = ({
   greenCorridors = [],
   onRoadClick,
   onJunctionClick,
+  onTrafficFlowClick,
   center,
   zoom = 12,
   interactive = true,
   hideAdminOverlays = false,
+  trafficFlowGeoJSON,
   cameras = [],
   sensors = [],
   busStops = [],
@@ -160,6 +165,7 @@ export const MapContainer: React.FC<MapProps> = ({
   const metroMarkersRef = useRef<Map<string, { marker: maplibregl.Marker; el: HTMLElement }>>(new Map());
   const routeMarkersRef = useRef<maplibregl.Marker[]>([]);
   const searchMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const trafficFlowRef = useRef<TrafficFlowGeoJSON | null>(trafficFlowGeoJSON ?? null);
 
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('dark');
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,12 +174,15 @@ export const MapContainer: React.FC<MapProps> = ({
   const [showStyleMenu, setShowStyleMenu] = useState(false);
   const [showCityMenu, setShowCityMenu] = useState(false);
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+  const prevStyleRef = useRef<MapStyleType>(currentStyle);
 
   // Refs that hold the latest props for use in callbacks without re-creating the map
   const onRoadClickRef = useRef(onRoadClick);
   const onJunctionClickRef = useRef(onJunctionClick);
+  const onTrafficFlowClickRef = useRef(onTrafficFlowClick);
   useEffect(() => { onRoadClickRef.current = onRoadClick; }, [onRoadClick]);
   useEffect(() => { onJunctionClickRef.current = onJunctionClick; }, [onJunctionClick]);
+  useEffect(() => { onTrafficFlowClickRef.current = onTrafficFlowClick; }, [onTrafficFlowClick]);
 
   const cityConfig = CITIES[selectedCity] || CITIES['Bengaluru'];
   const activeCenter = center || cityConfig.center;
@@ -286,13 +295,12 @@ export const MapContainer: React.FC<MapProps> = ({
     canvas.addEventListener('webglcontextlost', onContextLost);
     canvas.addEventListener('webglcontextrestored', onContextRestored);
 
-    // After the base style loads, fetch real road geometry from OSM, then add layers.
-    map.on('load', async () => {
+    // After the base style loads, add road layers using local city GeoJSON (no external API)
+    map.on('load', () => {
       try {
         if (!hideAdminOverlays) {
           const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
-          const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
-          addRoadSource(map, realGeoJSON, showTrafficLayer);
+          addRoadSource(map, baseGeoJSON, showTrafficLayer);
           addGreenCorridorLayers(map, greenCorridors);
         }
         addRouteLayers(map, routes);
@@ -301,11 +309,13 @@ export const MapContainer: React.FC<MapProps> = ({
         addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
         addIncidentMarkers(map, incidents);
       }
+      isMapLoadedRef.current = true;
     });
 
     return () => {
       canvas.removeEventListener('webglcontextlost', onContextLost);
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
+      isMapLoadedRef.current = false;
       map.remove();
       mapRef.current = null;
     };
@@ -315,16 +325,21 @@ export const MapContainer: React.FC<MapProps> = ({
   // ── Imperative updates when props change (no map recreation) ──
 
   // Update tile style — re-add layers after the new style finishes loading
+  // Skip the initial render since the map is already created with the correct style
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    // Skip if style hasn't actually changed from the initial value
+    if (prevStyleRef.current === currentStyle) return;
+    prevStyleRef.current = currentStyle;
+    isMapLoadedRef.current = false;
     map.setStyle(buildMapStyle(MAP_STYLES[currentStyle].url, MAP_STYLES[currentStyle].paint));
     // Wait for the new style to load before re-adding custom layers
-    const onStyleLoad = async () => {
+    const onStyleLoad = () => {
+      isMapLoadedRef.current = true;
       if (!hideAdminOverlays) {
         const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
-        const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
-        addRoadSource(map, realGeoJSON, showTrafficLayer);
+        addRoadSource(map, baseGeoJSON, showTrafficLayer);
       }
       addRouteLayers(map, routes);
     };
@@ -336,12 +351,9 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     if (hideAdminOverlays) return;
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    (async () => {
-      const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
-      const realGeoJSON = await fetchRoadGeometry(baseGeoJSON, selectedCity);
-      addRoadSource(map, realGeoJSON, showTrafficLayer);
-    })();
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
+    const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
+    addRoadSource(map, baseGeoJSON, showTrafficLayer);
   }, [roadGeoJSON, showTrafficLayer, cityConfig, hideAdminOverlays]);
 
   // Update green corridors on map
@@ -356,7 +368,7 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     if (hideAdminOverlays) return;
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
     addJunctionMarkers(map, junctions.length > 0 ? junctions : cityConfig.junctions, selectedCity);
   }, [junctions, cityConfig, selectedCity, hideAdminOverlays]);
 
@@ -364,31 +376,36 @@ export const MapContainer: React.FC<MapProps> = ({
   useEffect(() => {
     if (hideAdminOverlays) return;
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
     addIncidentMarkers(map, incidents);
   }, [incidents, hideAdminOverlays]);
 
-  // Update route layers
+  // Update route layers — also auto-fit bounds to show full route
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
     addRouteLayers(map, routes);
+
+    // Auto-fit bounds to the selected or recommended route
+    if (routes && routes.length > 0) {
+      const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes.find((r) => r.isRecommended) || routes[0];
+      if (routeToFit?.coordinates && routeToFit.coordinates.length >= 2) {
+        const bounds = routeToFit.coordinates.reduce(
+          (b, coord) => b.extend(coord as maplibregl.LngLatLike),
+          new maplibregl.LngLatBounds(routeToFit.coordinates[0] as maplibregl.LngLatLike, routeToFit.coordinates[0] as maplibregl.LngLatLike),
+        );
+        map.fitBounds(bounds, { padding: { top: 80, bottom: 80, left: 60, right: 60 }, maxZoom: 14, duration: 900 });
+      }
+    }
   }, [routes, selectedRouteId]);
 
-  // Auto-fit map bounds to selected route (user route planner mode)
+  // Update traffic flow overlay (HERE real-time or synthetic) — works in all modes
   useEffect(() => {
-    if (!hideAdminOverlays) return;
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-    if (!routes || routes.length === 0) return;
-    const routeToFit = routes.find((r) => r.id === selectedRouteId) || routes[0];
-    if (!routeToFit || !routeToFit.coordinates || routeToFit.coordinates.length < 2) return;
-    const bounds = routeToFit.coordinates.reduce(
-      (b, coord) => b.extend(coord as maplibregl.LngLatLike),
-      new maplibregl.LngLatBounds(routeToFit.coordinates[0] as maplibregl.LngLatLike, routeToFit.coordinates[0] as maplibregl.LngLatLike),
-    );
-    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 }, maxZoom: 14, duration: 800 });
-  }, [routes, selectedRouteId, hideAdminOverlays]);
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
+    trafficFlowRef.current = trafficFlowGeoJSON ?? null;
+    addTrafficFlowLayer(map, trafficFlowGeoJSON);
+  }, [trafficFlowGeoJSON]);
 
   // ── Imperative helpers ──
 
@@ -464,6 +481,113 @@ export const MapContainer: React.FC<MapProps> = ({
           'line-opacity': selectedRouteId ? (isSelected ? 1.0 : 0.35) : 0.85,
         },
       });
+    });
+  }
+
+  function addTrafficFlowLayer(map: maplibregl.Map, flowData: TrafficFlowGeoJSON | null | undefined) {
+    // Remove existing traffic flow layers
+    ['traffic-flow-glow', 'traffic-flow-line'].forEach((id) => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    });
+    if (map.getSource('traffic-flow-src')) map.removeSource('traffic-flow-src');
+
+    if (!flowData || !flowData.features || flowData.features.length === 0) return;
+
+    map.addSource('traffic-flow-src', {
+      type: 'geojson',
+      data: flowData as unknown as string,
+    });
+
+    // Wide glow underlay
+    map.addLayer({
+      id: 'traffic-flow-glow',
+      type: 'line',
+      source: 'traffic-flow-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': [
+          'match',
+          ['get', 'trafficLevel'],
+          'smooth', '#22c55e',
+          'moderate', '#eab308',
+          'heavy', '#f97316',
+          'severe', '#ef4444',
+          '#94a3b8',
+        ],
+        'line-width': 12,
+        'line-opacity': 0.18,
+        'line-blur': 6,
+      },
+    });
+
+    // Main traffic flow lines — colored by traffic level on the actual road geometry
+    map.addLayer({
+      id: 'traffic-flow-line',
+      type: 'line',
+      source: 'traffic-flow-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': [
+          'match',
+          ['get', 'trafficLevel'],
+          'smooth', '#22c55e',
+          'moderate', '#eab308',
+          'heavy', '#f97316',
+          'severe', '#ef4444',
+          '#94a3b8',
+        ],
+        'line-width': 5,
+        'line-opacity': 0.88,
+      },
+    });
+
+    // Click handler for traffic flow segments
+    map.on('click', 'traffic-flow-line', (e) => {
+      if (e.features && e.features.length > 0) {
+        const p = e.features[0].properties as any;
+        const coords = (e.features[0].geometry as any)?.coordinates?.[0];
+        const popupHtml = `
+          <div style="font-family: monospace; padding: 6px; min-width: 180px;">
+            <div style="font-weight: bold; color: #38bdf8; font-size: 12px; margin-bottom: 4px;">${p.roadName || 'Road Segment'}</div>
+            <div style="font-size: 11px; color: #f8fafc;">
+              <div>Speed: <strong>${p.speed ?? '—'} km/h</strong> (free-flow: ${p.freeFlowSpeed ?? '—'})</div>
+              <div>Jam Factor: <strong>${p.jamFactor ?? '—'}</strong></div>
+              <div>Confidence: <strong>${p.confidence ?? '—'}</strong></div>
+              ${p.updated ? `<div>Last Updated: <strong>${p.updated}</strong></div>` : ''}
+              <div style="margin-top: 4px; color: #22c55e; font-weight: bold;">Source: ${p.source ?? 'HERE'}</div>
+            </div>
+          </div>
+        `;
+        if (coords) {
+          new maplibregl.Popup({ offset: 15 })
+            .setLngLat(coords)
+            .setHTML(popupHtml)
+            .addTo(map);
+        }
+        // Callback for parent components (e.g., LiveTraffic command center)
+        if (onTrafficFlowClickRef.current) {
+          const point = e.lngLat;
+          onTrafficFlowClickRef.current({
+            speed: p.speed ?? 0,
+            freeFlowSpeed: p.freeFlowSpeed ?? 0,
+            jamFactor: p.jamFactor ?? 0,
+            confidence: p.confidence ?? 0,
+            trafficLevel: p.trafficLevel ?? 'unknown',
+            roadName: p.roadName ?? 'Unknown Road',
+            updated: p.updated ?? '',
+            source: p.source ?? 'HERE',
+            lat: point.lat,
+            lng: point.lng,
+          });
+        }
+      }
+    });
+
+    map.on('mouseenter', 'traffic-flow-line', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'traffic-flow-line', () => {
+      map.getCanvas().style.cursor = '';
     });
   }
 
@@ -939,17 +1063,32 @@ export const MapContainer: React.FC<MapProps> = ({
             <span>{selectedCity} Live Network</span>
             <span className="text-cyan-400 text-[9px]">MapLibre Active</span>
           </div>
-          <div className="flex items-center gap-2 pt-1">
+          {trafficFlowRef.current?.meta?.source && (
+            <div className={`text-[9px] font-bold uppercase ${
+              trafficFlowRef.current.meta.source === 'HERE' ? 'text-emerald-400' : 'text-amber-400'
+            }`}>
+              {trafficFlowRef.current.meta.source === 'HERE' ? '● REAL TRAFFIC / HERE' : '● DEMO / SYNTHETIC'}
+              {trafficFlowRef.current.meta.label && (
+                <span className="text-slate-500 ml-1">({trafficFlowRef.current.meta.label})</span>
+              )}
+            </div>
+          )}
+          <div className="font-bold text-slate-500 text-[9px] uppercase pt-1">TRAFFIC LEGEND</div>
+          <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-emerald-500 inline-block rounded" />
-            <span>Clear Flow (&gt;40 km/h)</span>
+            <span>🟢 Clear Flow</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-amber-500 inline-block rounded" />
-            <span>Slow Traffic (20-40 km/h)</span>
+            <span>🟡 Slow Traffic</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3 h-1 bg-red-500 inline-block rounded" />
-            <span>Heavy Gridlock (&lt;20 km/h)</span>
+            <span>🔴 Heavy Gridlock</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-1 bg-slate-500 inline-block rounded" />
+            <span>⚪ No Data</span>
           </div>
           {greenCorridors.some(c => c.status === 'active') && (
             <>

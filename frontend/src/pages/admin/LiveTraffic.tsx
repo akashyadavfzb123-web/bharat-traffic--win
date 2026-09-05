@@ -1,51 +1,133 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { trafficService } from '../../services/api';
 import type { Junction, Incident } from '../../types/traffic';
-import type { RoadSegmentProperties } from '../../data/mockGeoJSON';
+
 import { useRealtime } from '../../context/RealtimeContext';
 import { useApp } from '../../context/AppContext';
 import { getSyntheticTrafficData } from '../../services/syntheticTrafficProvider';
 import type { SyntheticTrafficData } from '../../types/synthetic';
 import { MapContainer } from '../../components/common/MapContainer';
 import { MOCK_EMERGENCY_CORRIDORS, corridorsToMapFormat } from '../../mock/mockEmergency';
-import { Link } from 'react-router-dom';
+import {
+  fetchTrafficFlow,
+
+  expandBounds,
+} from '../../services/hereTrafficApi';
+import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
+import { CITIES } from '../../data/cityData';
 import {
   Map,
-  Filter,
-  Gauge,
-  Car,
+  Layers,
   Activity,
   Clock,
-  Cpu,
-  ArrowUpRight,
-  Layers,
+  Car,
+  Gauge,
+  AlertTriangle,
+
   X,
-  ChevronRight,
-  Siren,
+  Radio,
+  RefreshCw,
+  Eye,
+  EyeOff,
+  Zap,
 } from 'lucide-react';
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
 type InspectorTarget =
-  | { type: 'road'; data: RoadSegmentProperties }
+  | { type: 'road'; data: any }
   | { type: 'junction'; data: Junction }
   | null;
 
+interface TrafficFlowProps {
+  speed: number;
+  freeFlowSpeed: number;
+  jamFactor: number;
+  confidence: number;
+  trafficLevel: string;
+  roadName: string;
+  updated: string;
+  source: string;
+  lat: number;
+  lng: number;
+}
+
+// ── Traffic Layer Controls ──────────────────────────────────────────────────
+
+interface LayerToggles {
+  flow: boolean;
+  speed: boolean;
+  incidents: boolean;
+  junctions: boolean;
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────
+
 export const AdminLiveTraffic: React.FC = () => {
-  const { selectedCity } = useApp();
+  const { selectedCity, setSelectedCity } = useApp();
   const { snapshot, wsConnected, wsMode } = useRealtime();
+
+  // ── State ──
   const [junctions, setJunctions] = useState<Junction[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [filterMode, setFilterMode] = useState<'all' | 'critical' | 'adaptive'>('all');
-  const [roadFilter, setRoadFilter] = useState<'all' | 'gridlock' | 'heavy' | 'slow' | 'clear'>('all');
   const [selectedTarget, setSelectedTarget] = useState<InspectorTarget>(null);
-  const [greenCorridors] = useState(corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS));
+  const [trafficFlow, setTrafficFlow] = useState<TrafficFlowGeoJSON | null>(null);
+  const [trafficSource, setTrafficSource] = useState<'HERE' | 'SYNTHETIC' | 'loading'>('loading');
+  const [lastUpdated, setLastUpdated] = useState<string>('--:--:--');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [layers, setLayers] = useState<LayerToggles>({
+    flow: true,
+    speed: false,
+    incidents: true,
+    junctions: true,
+  });
+  const [selectedFlowProps, setSelectedFlowProps] = useState<TrafficFlowProps | null>(null);
+  const [showCityMenu, setShowCityMenu] = useState(false);
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const greenCorridors = useMemo(() => corridorsToMapFormat(MOCK_EMERGENCY_CORRIDORS), []);
 
   const synthData: SyntheticTrafficData = useMemo(
     () => getSyntheticTrafficData(selectedCity),
     [selectedCity]
   );
 
+  // ── Fetch HERE Traffic Flow ──
+  const fetchTraffic = useCallback(async () => {
+    const cityCfg = CITIES[selectedCity] || CITIES['Bengaluru'];
+    const [lng, lat] = cityCfg.center;
+    const dLat = 0.15;
+    const dLng = 0.18;
+    const bounds = {
+      north: lat + dLat,
+      south: lat - dLat,
+      east: lng + dLng,
+      west: lng - dLng,
+    };
+
+    try {
+      const flowData = await fetchTrafficFlow(expandBounds(bounds, 0.1));
+      setTrafficFlow(flowData);
+      const src = flowData.meta?.source === 'HERE' ? 'HERE' : 'SYNTHETIC';
+      setTrafficSource(src as 'HERE' | 'SYNTHETIC');
+      setLastUpdated(new Date().toLocaleTimeString('en-US', { hour12: false }));
+    } catch {
+      // Fallback to synthetic
+      setTrafficFlow(null);
+      setTrafficSource('SYNTHETIC');
+      setLastUpdated(new Date().toLocaleTimeString('en-US', { hour12: false }));
+    }
+  }, [selectedCity]);
+
+  // ── Fetch traffic on city change ──
   useEffect(() => {
-    // Map synthetic junctions into Junction types
+    setTrafficSource('loading');
+    setSelectedTarget(null);
+    setSelectedFlowProps(null);
+    fetchTraffic();
+  }, [selectedCity, fetchTraffic]);
+
+  // ── Fetch junctions + incidents ──
+  useEffect(() => {
     const cityJunctions: Junction[] = synthData.junctions.map((sj) => ({
       id: sj.id,
       name: sj.name,
@@ -59,14 +141,25 @@ export const AdminLiveTraffic: React.FC = () => {
       signalMode: sj.status === 'critical' ? 'adaptive' : 'fixed',
       cycleLengthSec: sj.status === 'critical' ? 200 : sj.congestionPct > 60 ? 160 : 90,
       activePhase: sj.status === 'critical' ? 'Green Corridor Override' : 'Standard Phase',
-      lastUpdated: 'SYNTHETIC',
+      lastUpdated: trafficSource === 'HERE' ? 'HERE' : 'SYNTHETIC',
     }));
-
     setJunctions(cityJunctions);
     trafficService.getIncidents().then(setIncidents);
-  }, [selectedCity, synthData]);
+  }, [selectedCity, synthData, trafficSource]);
 
-  // Sync junction data with real-time simulation
+  // ── Auto Refresh (60s) ──
+  useEffect(() => {
+    if (autoRefresh) {
+      refreshTimerRef.current = setInterval(() => {
+        fetchTraffic();
+      }, 60_000);
+    }
+    return () => {
+      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+    };
+  }, [autoRefresh, fetchTraffic]);
+
+  // ── Sync with real-time simulation ──
   useEffect(() => {
     setJunctions((prev) =>
       prev.map((localJ) => {
@@ -86,201 +179,260 @@ export const AdminLiveTraffic: React.FC = () => {
     );
   }, [snapshot.junctions]);
 
-  useEffect(() => {
-    setIncidents((prev) =>
-      prev.map((localI) => {
-        const realtimeI = snapshot.incidents.find((ri) => ri.id === localI.id);
-        if (realtimeI) {
-          return { ...localI, status: realtimeI.status };
-        }
-        return localI;
-      })
-    );
-  }, [snapshot.incidents]);
+  // ── Computed Stats from HERE flow data ──
+  const trafficStats = useMemo(() => {
+    if (!trafficFlow?.features || trafficFlow.features.length === 0) {
+      return { totalSegments: 0, smoothPct: 0, moderatePct: 0, heavyPct: 0, avgSpeed: 0, congestionPct: 0 };
+    }
+    const features = trafficFlow.features;
+    const total = features.length;
+    const smooth = features.filter((f) => f.properties.trafficLevel === 'smooth').length;
+    const moderate = features.filter((f) => f.properties.trafficLevel === 'moderate').length;
+    const heavy = features.filter((f) => f.properties.trafficLevel === 'heavy' || f.properties.trafficLevel === 'severe').length;
+    const avgSpeed = Math.round(features.reduce((s, f) => s + f.properties.speed, 0) / total);
+    const congestionPct = Math.round(((moderate + heavy) / total) * 100);
+    return {
+      totalSegments: total,
+      smoothPct: Math.round((smooth / total) * 100),
+      moderatePct: Math.round((moderate / total) * 100),
+      heavyPct: Math.round((heavy / total) * 100),
+      avgSpeed,
+      congestionPct,
+    };
+  }, [trafficFlow]);
 
-  // Filtered junctions
-  const filteredJunctions = junctions.filter((j) => {
-    if (filterMode === 'critical') return j.status === 'critical' || j.status === 'red';
-    if (filterMode === 'adaptive') return j.signalMode === 'adaptive';
-    return true;
-  });
-
-  // Filtered roads from synthetic data
-  const roadFeatures: RoadSegmentProperties[] = useMemo(() => {
-    return synthData.roads.map((r) => ({
-      id: r.id,
-      name: r.roadName,
-      corridor: `${selectedCity} Arterial`,
-      congestion: r.congestion,
-      avgSpeedKmh: r.speed,
-      densityVehKm: Math.round(r.vehicleCount * 0.6),
-      roadStatus: r.congestion > 70 ? 'Gridlock' as const : r.congestion > 40 ? 'Heavy Congestion' as const : r.congestion > 20 ? 'Slow Traffic' as const : 'Clear' as const,
-      incidentCount: 0,
-      laneCount: 3,
-      lengthKm: Math.round(r.coordinates.length * 1.2),
-      lastUpdated: 'SYNTHETIC',
+  // ── Top Congested Corridors ──
+  const topCorridors = useMemo(() => {
+    if (!trafficFlow?.features) return [];
+    const sorted = [...trafficFlow.features]
+      .sort((a, b) => a.properties.speed - b.properties.speed)
+      .slice(0, 5);
+    return sorted.map((f) => ({
+      name: f.properties.roadName || 'Unknown Road',
+      speed: f.properties.speed,
+      jamFactor: f.properties.jamFactor,
+      level: f.properties.trafficLevel,
     }));
-  }, [synthData, selectedCity]);
+  }, [trafficFlow]);
 
-  const filteredRoads = roadFeatures.filter((r) => {
-    if (roadFilter === 'gridlock') return r.roadStatus === 'Gridlock';
-    if (roadFilter === 'heavy') return r.roadStatus === 'Heavy Congestion';
-    if (roadFilter === 'slow') return r.roadStatus === 'Slow Traffic';
-    if (roadFilter === 'clear') return r.roadStatus === 'Clear';
-    return true;
-  });
+  // ── Traffic Feed (recent segments) ──
+  const trafficFeed = useMemo(() => {
+    if (!trafficFlow?.features) return [];
+    return trafficFlow.features.slice(0, 15).map((f) => ({
+      roadName: f.properties.roadName || 'Unknown Road',
+      speed: f.properties.speed,
+      jamFactor: f.properties.jamFactor,
+      trafficLevel: f.properties.trafficLevel,
+      updated: f.properties.updated,
+    }));
+  }, [trafficFlow]);
 
-  // Filtered GeoJSON for map from synthetic data
-  const filteredGeoJSON = useMemo(() => ({
-    ...synthData.roadsGeoJSON,
-    features: synthData.roadsGeoJSON.features.filter((f) => filteredRoads.some((r) => r.id === f.properties.id)),
-  }), [synthData, filteredRoads]);
+  // ── Incident count ──
+  const activeIncidents = incidents.filter((i) => i.status !== 'resolved').length;
 
-  // Summary stats
-  const totalVehicles = filteredJunctions.reduce((s, j) => s + j.vehicleCount, 0);
-  const avgCongestion = Math.round(filteredJunctions.reduce((s, j) => s + j.congestionIndex, 0) / (filteredJunctions.length || 1));
-  const criticalCount = filteredJunctions.filter((j) => j.status === 'critical').length;
-
-  // Click handlers
-  const handleRoadClick = useCallback((road: RoadSegmentProperties) => {
-    setSelectedTarget({ type: 'road', data: road });
+  // ── Click handlers ──
+  const handleTrafficFlowClick = useCallback((props: TrafficFlowProps) => {
+    setSelectedFlowProps(props);
+    setSelectedTarget({ type: 'road', data: props });
   }, []);
 
   const handleJunctionClick = useCallback((junction: Junction) => {
+    setSelectedFlowProps(null);
     setSelectedTarget({ type: 'junction', data: junction });
   }, []);
 
+  const handleCitySelect = useCallback((city: string) => {
+    setSelectedCity(city);
+    setShowCityMenu(false);
+  }, [setSelectedCity]);
+
+  // ── Traffic source color ──
+  const isReal = trafficSource === 'HERE';
+
   return (
-    <div className="h-[calc(100vh-8rem)] flex flex-col space-y-3">
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shrink-0">
-        <div>
-          <h2 className="text-lg font-black text-slate-100 font-mono flex items-center gap-2">
-            <Map className="w-5 h-5 text-emerald-400" />
-            LIVE TRAFFIC & JUNCTION TELEMETRY ({selectedCity.toUpperCase()})
+    <div className="h-[calc(100vh-8rem)] flex flex-col space-y-2">
+      {/* ══════════════════════════════════════════════════════════════════════
+          TOP BAR — Command Center Header
+         ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shrink-0 bg-slate-900/80 border border-slate-800 rounded-xl px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-black text-slate-100 font-mono flex items-center gap-2">
+            <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+            LIVE TRAFFIC & JUNCTION TELEMETRY
           </h2>
-          <p className="text-[11px] text-slate-400">
-            Interactive GIS matrix for {selectedCity} — click any road segment or intersection marker for detailed telemetry.
-          </p>
+          {/* HERE LIVE / DEMO badge */}
+          <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-[9px] font-mono font-bold ${
+            isReal
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isReal ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            {isReal ? 'HERE LIVE' : trafficSource === 'loading' ? 'LOADING...' : 'DEMO DATA'}
+          </div>
+          {/* Last Updated */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-950 border border-slate-800 rounded-lg text-[9px] font-mono">
+            <Clock className="w-2.5 h-2.5 text-slate-500" />
+            <span className="text-slate-400">Last Updated</span>
+            <span className="text-cyan-300 font-bold">{lastUpdated}</span>
+          </div>
+          {/* Auto Refresh */}
+          <button
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[9px] font-mono font-bold transition-all ${
+              autoRefresh
+                ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                : 'bg-slate-950 border-slate-800 text-slate-500'
+            }`}
+          >
+            <RefreshCw className={`w-2.5 h-2.5 ${autoRefresh ? 'animate-spin' : ''}`} />
+            Auto Refresh: {autoRefresh ? 'ON' : 'OFF'}
+          </button>
+          {/* Manual Refresh */}
+          <button
+            onClick={fetchTraffic}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-lg border bg-slate-950 border-slate-800 text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30 transition-all text-[9px] font-mono"
+          >
+            <RefreshCw className="w-2.5 h-2.5" />
+            Refresh Now
+          </button>
         </div>
 
+        {/* Summary Telemetry Cards */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Live tick */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-900 border border-emerald-500/30 rounded-lg">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 animate-ping opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
-            </span>
-            <span className="text-[9px] font-mono font-bold text-emerald-400">TICK #{snapshot.tickCount}</span>
-          </div>
-
-          {/* WebSocket status */}
-          <div className={`flex items-center gap-1.5 px-2 py-1 bg-slate-900 border rounded-lg ${
-            wsConnected ? 'border-emerald-500/30' : 'border-amber-500/30'
+          <TelemetryMini label="Vehicles" value={junctions.reduce((s, j) => s + j.vehicleCount, 0).toLocaleString()} icon={Car} color="cyan" />
+          <TelemetryMini label="Avg Speed" value={`${trafficStats.avgSpeed || '—'} km/h`} icon={Gauge} color={trafficStats.avgSpeed < 20 ? 'red' : 'emerald'} />
+          <TelemetryMini label="Congestion" value={`${trafficStats.congestionPct}%`} icon={Activity} color={trafficStats.congestionPct > 70 ? 'red' : trafficStats.congestionPct > 40 ? 'amber' : 'emerald'} />
+          <TelemetryMini label="Junctions" value={`${junctions.length}`} icon={Zap} color="purple" />
+          <TelemetryMini label="Incidents" value={`${activeIncidents}`} icon={AlertTriangle} color={activeIncidents > 0 ? 'red' : 'emerald'} />
+          {/* WS Status */}
+          <div className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[9px] font-mono ${
+            wsConnected ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
           }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${
-              wsConnected ? 'bg-emerald-400' : 'bg-amber-400'
-            }`} />
-            <span className={`text-[9px] font-mono font-bold ${
-              wsConnected ? 'text-emerald-400' : 'text-amber-400'
-            }`}>{
-              wsMode === 'websocket' ? 'WS LIVE' : wsMode === 'rest' ? 'REST' : 'OFFLINE'
-            }</span>
-          </div>
-
-          {/* Quick summary */}
-          <div className="flex items-center gap-3 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-[10px] font-mono">
-            <span className="text-slate-400">Vehicles: <span className="text-cyan-300 font-bold">{totalVehicles.toLocaleString()}</span></span>
-            <span className="text-slate-700">|</span>
-            <span className="text-slate-400">Avg: <span className={`font-bold ${avgCongestion > 70 ? 'text-red-400' : 'text-emerald-400'}`}>{avgCongestion}%</span></span>
-            {criticalCount > 0 && (
-              <>
-                <span className="text-slate-700">|</span>
-                <span className="text-red-400 font-bold">{criticalCount} critical</span>
-              </>
-            )}
-          </div>
-
-          {/* Junction filter */}
-          <div className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 p-0.5 rounded-lg">
-            <Filter className="w-3 h-3 text-slate-500 ml-1" />
-            {(['all', 'critical', 'adaptive'] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setFilterMode(mode)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
-                  filterMode === mode
-                    ? mode === 'critical' ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}
-              >
-                {mode === 'all' ? `All (${junctions.length})` : mode === 'critical' ? 'Critical' : 'Adaptive'}
-              </button>
-            ))}
+            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            {wsMode === 'websocket' ? 'WS LIVE' : wsMode === 'rest' ? 'REST' : 'OFFLINE'}
           </div>
         </div>
       </div>
 
-      {/* ── Main Grid: Map + Inspector ── */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-3 min-h-0">
-        {/* Map Panel */}
-        <div className="lg:col-span-3 flex flex-col min-h-0">
-          {/* Road status filter bar */}
-          <div className="flex items-center gap-1 mb-2 shrink-0">
-            <Layers className="w-3 h-3 text-slate-500" />
-            <span className="text-[9px] font-mono text-slate-500 mr-1">ROADS:</span>
-            {([
-              { key: 'all', label: 'All', count: roadFeatures.length },
-              { key: 'gridlock', label: 'Gridlock', count: roadFeatures.filter((r) => r.roadStatus === 'Gridlock').length, color: 'text-red-400' },
-              { key: 'heavy', label: 'Heavy', count: roadFeatures.filter((r) => r.roadStatus === 'Heavy Congestion').length, color: 'text-amber-400' },
-              { key: 'slow', label: 'Slow', count: roadFeatures.filter((r) => r.roadStatus === 'Slow Traffic').length, color: 'text-yellow-400' },
-              { key: 'clear', label: 'Clear', count: roadFeatures.filter((r) => r.roadStatus === 'Clear').length, color: 'text-emerald-400' },
-            ] as const).map((opt: { key: string; label: string; count: number; color?: string }) => (
-              <button
-                key={opt.key}
-                onClick={() => setRoadFilter(opt.key as typeof roadFilter)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
-                  roadFilter === opt.key
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : `text-slate-500 hover:text-slate-300 ${'color' in opt ? opt.color : ''}`
-                }`}
-              >
-                {opt.label} ({opt.count})
-              </button>
-            ))}
-          </div>
+      {/* ══════════════════════════════════════════════════════════════════════
+          TRAFFIC CONTROLS BAR
+         ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center gap-2 shrink-0 bg-slate-900/60 border border-slate-800 rounded-xl px-3 py-1.5">
+        <Layers className="w-3 h-3 text-slate-500" />
+        <span className="text-[9px] font-mono text-slate-500 font-bold uppercase">Traffic Layer:</span>
+        <ToggleChip active={layers.flow} label="Flow" onToggle={() => setLayers((l) => ({ ...l, flow: !l.flow }))} color="emerald" />
+        <ToggleChip active={layers.speed} label="Speed" onToggle={() => setLayers((l) => ({ ...l, speed: !l.speed }))} color="cyan" />
+        <ToggleChip active={layers.incidents} label="Incidents" onToggle={() => setLayers((l) => ({ ...l, incidents: !l.incidents }))} color="red" />
+        <div className="w-px h-4 bg-slate-700 mx-1" />
+        <ToggleChip active={layers.junctions} label="Show Junctions" onToggle={() => setLayers((l) => ({ ...l, junctions: !l.junctions }))} color="amber" />
+        {/* City Selector */}
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setShowCityMenu(!showCityMenu)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold font-mono text-cyan-300 hover:text-cyan-200 hover:border-cyan-500/40 transition-all"
+          >
+            <Map className="w-3 h-3 text-cyan-400" />
+            {selectedCity}
+          </button>
+          {showCityMenu && (
+            <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-40 w-44 font-mono text-xs space-y-0.5">
+              <div className="text-[9px] text-slate-500 font-bold px-2 py-1 uppercase">Select City</div>
+              {['Bengaluru', 'Delhi-NCR', 'Mumbai', 'Hyderabad'].map((city) => (
+                <button
+                  key={city}
+                  onClick={() => handleCitySelect(city)}
+                  className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                    selectedCity === city
+                      ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <span>{city}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
+      {/* ══════════════════════════════════════════════════════════════════════
+          MAIN GRID: Map (3 cols) + Right Sidebar (1 col)
+         ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-2 min-h-0">
+        {/* ── MAP PANEL ── */}
+        <div className="lg:col-span-3 flex flex-col min-h-0">
           <div className="flex-1 min-h-0">
             <MapContainer
-              junctions={filteredJunctions}
-              incidents={incidents}
-              roadGeoJSON={filteredGeoJSON as any}
+              junctions={layers.junctions ? junctions : []}
+              incidents={layers.incidents ? incidents : []}
+              roadGeoJSON={synthData.roadsGeoJSON as any}
               cameras={synthData.cameras}
               sensors={synthData.sensors}
               busStops={synthData.busStops}
               metroStations={synthData.metroStations}
               greenCorridors={greenCorridors}
-              onRoadClick={handleRoadClick}
+              trafficFlowGeoJSON={layers.flow ? trafficFlow : null}
+              onTrafficFlowClick={handleTrafficFlowClick}
               onJunctionClick={handleJunctionClick}
-              selectedRoadId={selectedTarget?.type === 'road' ? selectedTarget.data.id : null}
               selectedJunctionId={selectedTarget?.type === 'junction' ? selectedTarget.data.id : null}
             />
           </div>
         </div>
 
-        {/* ── Inspector / Monitor Panel ── */}
-        <div className="flex flex-col min-h-0 overflow-hidden bg-slate-900 border border-slate-800 rounded-xl">
-          {selectedTarget ? (
-            /* ── Detailed Inspector ── */
-            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-              {/* Inspector Header */}
-              <div className="px-3 py-2.5 border-b border-slate-800 flex items-center justify-between shrink-0">
-                <h3 className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                  {selectedTarget.type === 'road' ? (
-                    <><Gauge className="w-3 h-3" /> Road Inspector</>
-                  ) : (
-                    <><Cpu className="w-3 h-3" /> Intersection Inspector</>
-                  )}
+        {/* ── RIGHT SIDEBAR ── */}
+        <div className="flex flex-col min-h-0 gap-2 overflow-hidden">
+
+          {/* ── Selected Road Detail Panel ── */}
+          {selectedTarget?.type === 'road' && selectedFlowProps && (
+            <div className="bg-slate-900 border border-cyan-500/30 rounded-xl overflow-hidden shrink-0">
+              <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
+                <h3 className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <Gauge className="w-3 h-3" />
+                  SELECTED ROAD SEGMENT
+                </h3>
+                <button
+                  onClick={() => { setSelectedTarget(null); setSelectedFlowProps(null); }}
+                  className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="p-3 space-y-2">
+                <h4 className="text-sm font-bold text-slate-100">{selectedFlowProps.roadName}</h4>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <RoadStat label="Speed" value={`${selectedFlowProps.speed} km/h`} color={selectedFlowProps.speed < 20 ? 'text-red-400' : 'text-emerald-400'} />
+                  <RoadStat label="Jam Factor" value={`${selectedFlowProps.jamFactor}`} color={selectedFlowProps.jamFactor > 5 ? 'text-red-400' : 'text-emerald-400'} />
+                  <RoadStat label="Traffic" value={selectedFlowProps.trafficLevel.toUpperCase()} color={selectedFlowProps.trafficLevel === 'smooth' ? 'text-emerald-400' : selectedFlowProps.trafficLevel === 'moderate' ? 'text-amber-400' : 'text-red-400'} />
+                  <RoadStat label="Confidence" value={`${selectedFlowProps.confidence}`} color="text-slate-300" />
+                </div>
+                <div className="space-y-1 text-[10px] font-mono">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Last Updated</span>
+                    <span className="text-slate-300">{selectedFlowProps.updated || '—'}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Source</span>
+                    <span className={isReal ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                      {selectedFlowProps.source || 'HERE'} Traffic API
+                    </span>
+                  </div>
+                </div>
+                <div className={`text-[9px] font-bold text-center py-1 rounded-lg border ${
+                  isReal ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                }`}>
+                  Source: {isReal ? 'HERE Traffic API' : 'DEMO / SYNTHETIC'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Junction Inspector ── */}
+          {selectedTarget?.type === 'junction' && (
+            <div className="bg-slate-900 border border-amber-500/30 rounded-xl overflow-hidden shrink-0">
+              <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
+                <h3 className="text-[10px] font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <Zap className="w-3 h-3" />
+                  JUNCTION INSPECTOR
                 </h3>
                 <button
                   onClick={() => setSelectedTarget(null)}
@@ -289,250 +441,129 @@ export const AdminLiveTraffic: React.FC = () => {
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                {selectedTarget.type === 'road' ? (
-                  /* ── Road Detail ── */
-                  <RoadInspector data={selectedTarget.data} incidents={incidents} />
-                ) : (
-                  /* ── Junction Detail ── */
-                  <JunctionInspector data={selectedTarget.data} />
-                )}
-              </div>
-            </div>
-          ) : (
-            /* ── Default: Queue Monitor ── */
-            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-              <div className="px-3 py-2.5 border-b border-slate-800 shrink-0">
-                <h3 className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono">
-                  {selectedCity} Junction Queue Monitor
-                </h3>
-              </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-                {filteredJunctions.map((j) => (
-                  <div
-                    key={j.id}
-                    onClick={() => handleJunctionClick(j)}
-                    className={`p-2.5 rounded-lg border cursor-pointer transition-all hover:border-emerald-500/30 ${
-                      j.status === 'critical' ? 'bg-red-950/20 border-red-500/30' :
-                      j.status === 'red' ? 'bg-amber-950/10 border-amber-500/20' :
-                      'bg-slate-950 border-slate-800'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{
-                          backgroundColor: j.status === 'critical' ? '#ef4444' : j.status === 'red' ? '#f97316' : j.status === 'yellow' ? '#eab308' : '#22c55e'
-                        }} />
-                        <span className="text-[11px] font-bold text-slate-200 truncate">{j.name}</span>
-                      </div>
-                      <ChevronRight className="w-3 h-3 text-slate-500 shrink-0" />
-                    </div>
-                    <div className="mt-1.5 grid grid-cols-3 gap-1 text-[9px] font-mono text-slate-400">
-                      <span>Wait: <span className={`${j.currentWaitTimeSec > 120 ? 'text-red-400' : 'text-slate-200'}`}>{j.currentWaitTimeSec}s</span></span>
-                      <span>Queue: <span className="text-slate-200">{j.vehicleCount}</span></span>
-                      <span className={`font-bold ${j.congestionIndex > 85 ? 'text-red-400' : j.congestionIndex > 65 ? 'text-amber-400' : 'text-emerald-400'}`}>{j.congestionIndex}%</span>
-                    </div>
-                  </div>
-                ))}
+              <div className="p-3 space-y-2">
+                <h4 className="text-sm font-bold text-slate-100">{selectedTarget.data.name}</h4>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <RoadStat label="Wait Time" value={`${selectedTarget.data.currentWaitTimeSec}s`} color={selectedTarget.data.currentWaitTimeSec > 120 ? 'text-red-400' : 'text-emerald-400'} />
+                  <RoadStat label="Queue" value={`${selectedTarget.data.vehicleCount}`} color="text-cyan-400" />
+                  <RoadStat label="Congestion" value={`${selectedTarget.data.congestionIndex}%`} color={selectedTarget.data.congestionIndex > 80 ? 'text-red-400' : 'text-emerald-400'} />
+                  <RoadStat label="Mode" value={selectedTarget.data.signalMode?.toUpperCase()} color="text-purple-400" />
+                </div>
+                <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                  <span>Active Phase</span>
+                  <span className="text-cyan-400">{selectedTarget.data.activePhase}</span>
+                </div>
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
-  );
-};
 
-// ── Road Inspector Sub-component ──
-const RoadInspector: React.FC<{ data: RoadSegmentProperties; incidents: Incident[] }> = ({ data, incidents }) => {
-  const roadIncidents = incidents.filter((inc) => inc.locationName.toLowerCase().includes(data.corridor.toLowerCase().split(' ')[0]));
-
-  const statusColor = {
-    'Gridlock': 'red',
-    'Heavy Congestion': 'amber',
-    'Slow Traffic': 'yellow',
-    'Clear': 'emerald',
-  } as const;
-
-  const statusKey = statusColor[data.roadStatus] || 'slate';
-
-  return (
-    <div className="space-y-3">
-      <div>
-        <h4 className="text-sm font-bold text-slate-100">{data.name}</h4>
-        <p className="text-[10px] text-slate-400 font-mono">{data.corridor}</p>
-      </div>
-
-      <div className={`flex items-center justify-between p-2 rounded-lg border ${
-        statusKey === 'red' ? 'bg-red-500/10 border-red-500/30' :
-        statusKey === 'amber' ? 'bg-amber-500/10 border-amber-500/30' :
-        statusKey === 'yellow' ? 'bg-yellow-500/10 border-yellow-500/30' :
-        'bg-emerald-500/10 border-emerald-500/30'
-      }`}>
-        <span className="text-[10px] text-slate-400">Road Status</span>
-        <span className={`text-[10px] font-mono font-bold ${
-          statusKey === 'red' ? 'text-red-400' :
-          statusKey === 'amber' ? 'text-amber-400' :
-          statusKey === 'yellow' ? 'text-yellow-400' :
-          'text-emerald-400'
-        }`}>{data.roadStatus}</span>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Telemetry</span>
-        <div className="grid grid-cols-2 gap-1.5">
-          <TelemetryCell icon={Car} label="Vehicles" value={`${Math.round(data.densityVehKm * data.lengthKm)}`} color="cyan" />
-          <TelemetryCell icon={Activity} label="Density" value={`${data.densityVehKm} v/km`} color="amber" />
-          <TelemetryCell icon={Gauge} label="Avg Speed" value={`${data.avgSpeedKmh} km/h`} color={data.avgSpeedKmh < 20 ? 'red' : 'emerald'} />
-          <TelemetryCell icon={Clock} label="Congestion" value={`${data.congestion}%`} color={data.congestion > 70 ? 'red' : data.congestion > 40 ? 'amber' : 'emerald'} />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Details</span>
-        <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-1 text-[10px] font-mono">
-          <div className="flex justify-between text-slate-400">
-            <span>Lanes:</span>
-            <span className="text-slate-200">{data.laneCount}</span>
-          </div>
-          <div className="flex justify-between text-slate-400">
-            <span>Length:</span>
-            <span className="text-slate-200">{data.lengthKm} km</span>
-          </div>
-          <div className="flex justify-between text-slate-400">
-            <span>Active Incidents:</span>
-            <span className={data.incidentCount > 0 ? 'text-red-400 font-bold' : 'text-emerald-400'}>{data.incidentCount}</span>
-          </div>
-          <div className="flex justify-between text-slate-400">
-            <span>Last Updated:</span>
-            <span className="text-slate-300">{data.lastUpdated}</span>
-          </div>
-        </div>
-      </div>
-
-      {roadIncidents.length > 0 && (
-        <div className="space-y-1.5">
-          <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Related Incidents</span>
-          {roadIncidents.slice(0, 2).map((inc) => (
-            <div key={inc.id} className="p-2 bg-red-950/20 rounded-lg border border-red-500/20 space-y-1">
-              <div className="flex justify-between items-center">
-                <span className="text-[10px] font-bold text-slate-200 truncate">{inc.title}</span>
-                <span className={`px-1 py-0.5 rounded text-[8px] font-mono font-bold ${
-                  inc.severity === 'critical' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
-                }`}>{inc.severity}</span>
-              </div>
-              <span className="text-[9px] text-slate-400 font-mono">+{inc.estimatedDelayMin} min delay</span>
+          {/* ── Live Traffic Summary ── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 shrink-0">
+            <h3 className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono pb-2 border-b border-slate-800 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Activity className="w-3 h-3 text-cyan-400" />
+                Live Traffic Summary
+              </span>
+              <span className={`text-[8px] px-1.5 py-0.5 rounded ${isReal ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                {isReal ? 'HERE' : 'DEMO'}
+              </span>
+            </h3>
+            <div className="grid grid-cols-3 gap-1.5 mt-2">
+              <StatPill label="Smooth" value={`${trafficStats.smoothPct}%`} color="bg-emerald-500/20 text-emerald-400" />
+              <StatPill label="Moderate" value={`${trafficStats.moderatePct}%`} color="bg-amber-500/20 text-amber-400" />
+              <StatPill label="Heavy" value={`${trafficStats.heavyPct}%`} color="bg-red-500/20 text-red-400" />
             </div>
-          ))}
-        </div>
-      )}
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <div className="p-1.5 bg-slate-950 rounded-lg border border-slate-800 text-center">
+                <span className="text-[8px] text-slate-500 block">Segments</span>
+                <span className="text-[11px] font-mono font-bold text-cyan-300">{trafficStats.totalSegments}</span>
+              </div>
+              <div className="p-1.5 bg-slate-950 rounded-lg border border-slate-800 text-center">
+                <span className="text-[8px] text-slate-500 block">Avg Speed</span>
+                <span className="text-[11px] font-mono font-bold text-slate-200">{trafficStats.avgSpeed} km/h</span>
+              </div>
+            </div>
+          </div>
 
-      <Link
-        to="/admin/signal-optimization"
-        className="flex items-center justify-center gap-1.5 w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition-all"
-      >
-        Optimize Signal for This Corridor
-        <ArrowUpRight className="w-3 h-3" />
-      </Link>
+          {/* ── Top Congested Corridors ── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl flex flex-col min-h-0 overflow-hidden">
+            <h3 className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono px-3 py-2 border-b border-slate-800 shrink-0">
+              Top Congested Corridors
+            </h3>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+              {topCorridors.length === 0 ? (
+                <div className="text-center text-[10px] text-slate-500 font-mono py-4">
+                  {trafficSource === 'loading' ? 'Loading traffic data...' : 'No corridor data available'}
+                </div>
+              ) : (
+                topCorridors.map((c, idx) => (
+                  <div key={idx} className="p-2 bg-slate-950 rounded-lg border border-slate-800 hover:border-slate-700 transition-all">
+                    <div className="flex justify-between items-start">
+                      <span className="text-[10px] font-bold text-slate-200 truncate pr-2">{c.name}</span>
+                      <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded shrink-0 ${
+                        c.level === 'smooth' ? 'bg-emerald-500/20 text-emerald-400' :
+                        c.level === 'moderate' ? 'bg-amber-500/20 text-amber-400' :
+                        'bg-red-500/20 text-red-400'
+                      }`}>
+                        {c.level.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between mt-1 text-[9px] font-mono text-slate-400">
+                      <span>Speed: <strong className="text-slate-200">{c.speed} km/h</strong></span>
+                      <span>JF: <strong className="text-slate-200">{c.jamFactor}</strong></span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* ── Live Traffic Feed ── */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl flex flex-col min-h-0 overflow-hidden flex-1">
+            <h3 className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono px-3 py-2 border-b border-slate-800 shrink-0 flex items-center justify-between">
+              <span>Live Traffic Feed</span>
+              <span className="text-[8px] text-slate-500">Source: {isReal ? 'HERE Traffic API' : 'SYNTHETIC'}</span>
+            </h3>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {trafficFeed.length === 0 ? (
+                <div className="text-center text-[10px] text-slate-500 font-mono py-4">
+                  {trafficSource === 'loading' ? 'Loading...' : 'No traffic segments'}
+                </div>
+              ) : (
+                trafficFeed.map((item, idx) => (
+                  <div key={idx} className="p-2 bg-slate-950 rounded-lg border border-slate-800 hover:border-slate-700 transition-all">
+                    <div className="flex justify-between items-start">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${
+                        item.trafficLevel === 'smooth' ? 'bg-emerald-400' :
+                        item.trafficLevel === 'moderate' ? 'bg-amber-400' :
+                        'bg-red-400'
+                      }`} />
+                      <span className="text-[10px] font-bold text-slate-200 truncate px-1.5 flex-1">{item.roadName}</span>
+                    </div>
+                    <div className="flex justify-between mt-1 text-[9px] font-mono text-slate-400 pl-3">
+                      <span>{item.speed} km/h</span>
+                      <span>JF: {item.jamFactor}</span>
+                      {item.updated && <span>{item.updated.slice(0, 10)}</span>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
 
-// ── Junction Inspector Sub-component ──
-const JunctionInspector: React.FC<{ data: Junction }> = ({ data }) => {
-  return (
-    <div className="space-y-3">
-      <div>
-        <h4 className="text-sm font-bold text-slate-100">{data.name}</h4>
-        <p className="text-[10px] text-slate-400 font-mono">{data.city}</p>
-      </div>
+// ── Sub-components ─────────────────────────────────────────────────────────
 
-      <div className={`flex items-center justify-between p-2 rounded-lg border ${
-        data.status === 'critical' ? 'bg-red-500/10 border-red-500/30' :
-        data.status === 'red' ? 'bg-amber-500/10 border-amber-500/30' :
-        data.status === 'yellow' ? 'bg-yellow-500/10 border-yellow-500/30' :
-        'bg-emerald-500/10 border-emerald-500/30'
-      }`}>
-        <span className="text-[10px] text-slate-400">Intersection Status</span>
-        <span className={`text-[10px] font-mono font-bold uppercase ${
-          data.status === 'critical' ? 'text-red-400' :
-          data.status === 'red' ? 'text-amber-400' :
-          data.status === 'yellow' ? 'text-yellow-400' :
-          'text-emerald-400'
-        }`}>{data.status}</span>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Telemetry</span>
-        <div className="grid grid-cols-2 gap-1.5">
-          <TelemetryCell icon={Car} label="Vehicles" value={data.vehicleCount.toLocaleString()} color="cyan" />
-          <TelemetryCell icon={Clock} label="Wait Time" value={`${data.currentWaitTimeSec}s`} color={data.currentWaitTimeSec > 120 ? 'red' : 'emerald'} />
-          <TelemetryCell icon={Activity} label="Congestion" value={`${data.congestionIndex}%`} color={data.congestionIndex > 85 ? 'red' : data.congestionIndex > 65 ? 'amber' : 'emerald'} />
-          <TelemetryCell icon={Cpu} label="Signal Mode" value={data.signalMode.toUpperCase()} color="cyan" />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Signal Controller</span>
-        <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-1 text-[10px] font-mono">
-          <div className="flex justify-between text-slate-400">
-            <span>Active Phase:</span>
-            <span className="text-cyan-400 font-bold truncate max-w-[120px]">{data.activePhase}</span>
-          </div>
-          <div className="flex justify-between text-slate-400">
-            <span>Cycle Length:</span>
-            <span className="text-slate-200">{data.cycleLengthSec}s</span>
-          </div>
-          <div className="flex justify-between text-slate-400">
-            <span>Last Updated:</span>
-            <span className="text-slate-300">{data.lastUpdated}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider">Queue Pressure</span>
-        <div className="w-full h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
-          <div
-            className={`h-full rounded-full transition-all duration-1000 ${
-              data.congestionIndex > 85 ? 'bg-red-500' : data.congestionIndex > 65 ? 'bg-amber-500' : 'bg-emerald-500'
-            }`}
-            style={{ width: `${data.congestionIndex}%` }}
-          />
-        </div>
-        <div className="flex justify-between text-[9px] font-mono text-slate-500">
-          <span>0%</span>
-          <span>{data.vehicleCount} vehicles queued</span>
-          <span>100%</span>
-        </div>
-      </div>
-
-      {data.signalMode === 'emergency' && (
-        <div className="p-2 bg-red-950/20 rounded-lg border border-red-500/30 flex items-center gap-2">
-          <Siren className="w-3.5 h-3.5 text-red-400 animate-pulse" />
-          <span className="text-[10px] font-mono text-red-300 font-bold">Green Corridor Active</span>
-        </div>
-      )}
-
-      <Link
-        to="/admin/signal-optimization"
-        className="flex items-center justify-center gap-1.5 w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-mono font-bold transition-all"
-      >
-        Override Signal Mode
-        <ArrowUpRight className="w-3 h-3" />
-      </Link>
-    </div>
-  );
-};
-
-// ── Reusable Telemetry Cell ──
-const TelemetryCell: React.FC<{
-  icon: React.ComponentType<{ className?: string }>;
+const TelemetryMini: React.FC<{
   label: string;
   value: string;
+  icon: React.ComponentType<{ className?: string }>;
   color: 'cyan' | 'emerald' | 'amber' | 'red' | 'purple';
-}> = ({ icon: Icon, label, value, color }) => {
+}> = ({ label, value, icon: Icon, color }) => {
   const colorMap = {
     cyan: 'text-cyan-400',
     emerald: 'text-emerald-400',
@@ -540,14 +571,48 @@ const TelemetryCell: React.FC<{
     red: 'text-red-400',
     purple: 'text-purple-400',
   };
-
   return (
-    <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-0.5">
-      <span className="text-[9px] text-slate-500 flex items-center gap-1">
-        <Icon className="w-2.5 h-2.5" />
-        {label}
-      </span>
-      <span className={`text-[11px] font-mono font-bold ${colorMap[color]}`}>{value}</span>
+    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-950 border border-slate-800 rounded-lg">
+      <Icon className={`w-2.5 h-2.5 ${colorMap[color]}`} />
+      <span className="text-[9px] text-slate-500">{label}:</span>
+      <span className={`text-[10px] font-mono font-bold ${colorMap[color]}`}>{value}</span>
     </div>
   );
 };
+
+const ToggleChip: React.FC<{
+  active: boolean;
+  label: string;
+  onToggle: () => void;
+  color: 'emerald' | 'cyan' | 'red' | 'amber';
+}> = ({ active, label, onToggle, color }) => {
+  const colorMap = {
+    emerald: active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-slate-950 text-slate-500 border-slate-800',
+    cyan: active ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40' : 'bg-slate-950 text-slate-500 border-slate-800',
+    red: active ? 'bg-red-500/20 text-red-400 border-red-500/40' : 'bg-slate-950 text-slate-500 border-slate-800',
+    amber: active ? 'bg-amber-500/20 text-amber-400 border-amber-500/40' : 'bg-slate-950 text-slate-500 border-slate-800',
+  };
+  return (
+    <button
+      onClick={onToggle}
+      className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border transition-all ${colorMap[color]}`}
+    >
+      {active ? <Eye className="w-2.5 h-2.5" /> : <EyeOff className="w-2.5 h-2.5" />}
+      {label}
+    </button>
+  );
+};
+
+const RoadStat: React.FC<{ label: string; value: string; color: string }> = ({ label, value, color }) => (
+  <div className="p-1.5 bg-slate-950 rounded-lg border border-slate-800">
+    <span className="text-[8px] text-slate-500 block">{label}</span>
+    <span className={`text-[11px] font-mono font-bold ${color}`}>{value}</span>
+  </div>
+);
+
+const StatPill: React.FC<{ label: string; value: string; color: string }> = ({ label, value, color }) => (
+  <div className={`p-1.5 rounded-lg text-center ${color}`}>
+    <span className="text-[8px] block opacity-80">{label}</span>
+    <span className="text-[11px] font-mono font-bold">{value}</span>
+  </div>
+);

@@ -95,6 +95,9 @@ export const AdminSignalOptimization: React.FC = () => {
           <p className="text-[11px] text-slate-400">
             AI-powered phase timing optimization — review recommendations, simulate, and approve.
           </p>
+          <span className="inline-block mt-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono font-bold text-amber-400">
+            DEMO DATA — Improvements are simulated estimates, not guaranteed real-world results
+          </span>
         </div>
         <button
           onClick={handleOptimizeAll}
