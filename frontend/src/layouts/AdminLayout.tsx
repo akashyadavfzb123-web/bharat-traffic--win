@@ -26,6 +26,7 @@ const MODULE_TITLES: Record<string, string> = {
   '/admin/analytics': 'Analytics Dashboard',
   '/admin/reports': 'Reports & Exports',
   '/admin/cities': 'City Management',
+  '/admin/judge-qa': 'Judge Q&A',
   '/admin/settings': 'System Settings',
 };
 

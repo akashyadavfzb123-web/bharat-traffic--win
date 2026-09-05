@@ -4,7 +4,7 @@ export interface RouteConfig {
   module: string;
 }
 
-export type AdminModule = 'overview' | 'monitoring' | 'optimization' | 'response' | 'intelligence' | 'system';
+export type AdminModule = 'overview' | 'monitoring' | 'optimization' | 'response' | 'intelligence' | 'judicial' | 'system';
 
 export const ADMIN_MODULE_LABELS: Record<AdminModule, string> = {
   overview: 'Overview',
@@ -12,6 +12,7 @@ export const ADMIN_MODULE_LABELS: Record<AdminModule, string> = {
   optimization: 'Optimization',
   response: 'Response',
   intelligence: 'Intelligence',
+  judicial: 'Judicial',
   system: 'System',
 };
 
@@ -28,5 +29,6 @@ export const ADMIN_ROUTES: RouteConfig[] = [
   { path: '/admin/analytics', name: 'Analytics', module: 'intelligence' },
   { path: '/admin/reports', name: 'Reports', module: 'intelligence' },
   { path: '/admin/cities', name: 'City Management', module: 'system' },
+  { path: '/admin/judge-qa', name: 'Judge Q&A', module: 'judicial' },
   { path: '/admin/settings', name: 'Settings', module: 'system' },
 ];

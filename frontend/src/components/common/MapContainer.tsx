@@ -8,6 +8,7 @@ import type { TrafficFlowGeoJSON } from '../../services/hereTrafficApi';
 import { CITIES } from '../../data/cityData';
 import { mapSearchService, type SearchResult } from '../../services/mapApi';
 import { useApp } from '../../context/AppContext';
+import { GoogleTrafficMap } from './GoogleTrafficMap';
 import {
   Layers,
   Search,
@@ -59,12 +60,20 @@ interface MapProps {
   metroStations?: SyntheticMetroStation[];
 }
 
-type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets';
+type MapStyleType = 'dark' | 'satellite' | 'traffic' | 'streets' | 'google-traffic' | 'google-satellite-traffic';
 
-// All tile sources are free — no API keys required.
-// Dark and traffic modes use OSM raster tiles with paint overrides for the visual style.
+// Tile sources
 const OSM_TILE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ARCGIS_SATELLITE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const GOOGLE_TRAFFIC_TILE = 'https://mt1.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}';
+const GOOGLE_SATELLITE_TRAFFIC_TILE = 'https://mt1.google.com/vt/lyrs=y,traffic&x={x}&y={y}&z={z}';
+
+export const GOOGLE_TRAFFIC_OVERLAY_TILES = [
+  'https://mt0.google.com/vt/lyrs=h,traffic&x={x}&y={y}&z={z}',
+  'https://mt1.google.com/vt/lyrs=h,traffic&x={x}&y={y}&z={z}',
+  'https://mt2.google.com/vt/lyrs=h,traffic&x={x}&y={y}&z={z}',
+  'https://mt3.google.com/vt/lyrs=h,traffic&x={x}&y={y}&z={z}',
+];
 
 interface MapStyleDef {
   name: string;
@@ -104,9 +113,20 @@ const MAP_STYLES: Record<MapStyleType, MapStyleDef> = {
     url: import.meta.env.VITE_MAP_STREETS_URL || OSM_TILE,
     icon: '🏙️',
   },
+  'google-traffic': {
+    name: 'Google Live Traffic',
+    url: GOOGLE_TRAFFIC_TILE,
+    icon: '🟢',
+  },
+  'google-satellite-traffic': {
+    name: 'Google Satellite Traffic',
+    url: GOOGLE_SATELLITE_TRAFFIC_TILE,
+    icon: '🛰️',
+  },
 };
 
 function buildMapStyle(tileUrl: string, paint?: Record<string, unknown>) {
+  const isGoogle = tileUrl.includes('google.com');
   return {
     version: 8 as const,
     sources: {
@@ -114,7 +134,7 @@ function buildMapStyle(tileUrl: string, paint?: Record<string, unknown>) {
         type: 'raster' as const,
         tiles: [tileUrl],
         tileSize: 256,
-        attribution: '&copy; OpenStreetMap',
+        attribution: isGoogle ? '&copy; Google Maps &copy; OpenStreetMap' : '&copy; OpenStreetMap',
       },
     },
     layers: [
@@ -123,7 +143,7 @@ function buildMapStyle(tileUrl: string, paint?: Record<string, unknown>) {
         type: 'raster' as const,
         source: 'base-tile-src',
         minzoom: 0,
-        maxzoom: 19,
+        maxzoom: 20,
         ...(paint || {}),
       },
     ],
@@ -174,6 +194,7 @@ export const MapContainer: React.FC<MapProps> = ({
   const [showStyleMenu, setShowStyleMenu] = useState(false);
   const [showCityMenu, setShowCityMenu] = useState(false);
   const [showTrafficLayer, setShowTrafficLayer] = useState(true);
+  const [mapEngine, setMapEngine] = useState<'maplibre' | 'google-native'>('maplibre');
   const prevStyleRef = useRef<MapStyleType>(currentStyle);
 
   // Refs that hold the latest props for use in callbacks without re-creating the map
@@ -298,6 +319,7 @@ export const MapContainer: React.FC<MapProps> = ({
     // After the base style loads, add road layers using local city GeoJSON (no external API)
     map.on('load', () => {
       try {
+        addGoogleTrafficOverlay(map, showTrafficLayer, currentStyle);
         if (!hideAdminOverlays) {
           const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
           addRoadSource(map, baseGeoJSON, showTrafficLayer);
@@ -337,6 +359,7 @@ export const MapContainer: React.FC<MapProps> = ({
     // Wait for the new style to load before re-adding custom layers
     const onStyleLoad = () => {
       isMapLoadedRef.current = true;
+      addGoogleTrafficOverlay(map, showTrafficLayer, currentStyle);
       if (!hideAdminOverlays) {
         const baseGeoJSON = (roadGeoJSON || cityConfig.roadsGeoJSON) as RoadGeoJSONCollection;
         addRoadSource(map, baseGeoJSON, showTrafficLayer);
@@ -407,7 +430,49 @@ export const MapContainer: React.FC<MapProps> = ({
     addTrafficFlowLayer(map, trafficFlowGeoJSON);
   }, [trafficFlowGeoJSON]);
 
+  // Update Google Maps live traffic overlay
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded() || !isMapLoadedRef.current) return;
+    addGoogleTrafficOverlay(map, showTrafficLayer, currentStyle);
+  }, [showTrafficLayer, currentStyle]);
+
   // ── Imperative helpers ──
+
+  function addGoogleTrafficOverlay(map: maplibregl.Map, show: boolean, style: MapStyleType) {
+    if (map.getLayer('google-traffic-overlay-layer')) map.removeLayer('google-traffic-overlay-layer');
+    if (map.getSource('google-traffic-overlay-src')) map.removeSource('google-traffic-overlay-src');
+
+    // If style already includes Google traffic, no need for the separate overlay
+    if (style === 'google-traffic' || style === 'google-satellite-traffic') return;
+    if (!show) return;
+
+    try {
+      map.addSource('google-traffic-overlay-src', {
+        type: 'raster',
+        tiles: GOOGLE_TRAFFIC_OVERLAY_TILES,
+        tileSize: 256,
+        attribution: '&copy; Google Traffic Layer',
+      });
+
+      const beforeId = map.getLayer('road-segments-line') ? 'road-segments-line' : undefined;
+      map.addLayer(
+        {
+          id: 'google-traffic-overlay-layer',
+          type: 'raster',
+          source: 'google-traffic-overlay-src',
+          minzoom: 0,
+          maxzoom: 20,
+          paint: {
+            'raster-opacity': 0.85,
+          },
+        },
+        beforeId,
+      );
+    } catch (e) {
+      console.warn('[MapContainer] Google traffic overlay load error:', e);
+    }
+  }
 
   function addRoadSource(map: maplibregl.Map, geoJSON: RoadGeoJSONCollection | undefined, show: boolean) {
     if (!geoJSON) return;
@@ -1004,6 +1069,18 @@ export const MapContainer: React.FC<MapProps> = ({
             {/* 4. Controls */}
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setMapEngine(mapEngine === 'maplibre' ? 'google-native' : 'maplibre')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
+                  mapEngine === 'google-native'
+                    ? 'bg-blue-600/30 text-blue-300 border-blue-500/50 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+                title="Switch between MapLibre and Native Google Maps TrafficLayer engine"
+              >
+                <span>{mapEngine === 'google-native' ? '🌐 Google Maps' : '⚡ MapLibre'}</span>
+              </button>
+
+              <button
                 onClick={() => setShowTrafficLayer(!showTrafficLayer)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold font-mono border transition-all ${
                   showTrafficLayer
@@ -1014,34 +1091,36 @@ export const MapContainer: React.FC<MapProps> = ({
                 <Zap className={`w-3 h-3 ${showTrafficLayer ? 'animate-pulse text-emerald-400' : ''}`} />
                 <span className="hidden md:inline">Traffic Layer</span>
               </button>
-              <div className="relative">
-                <button
-                  onClick={() => setShowStyleMenu(!showStyleMenu)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
-                >
-                  <Layers className="w-3 h-3 text-cyan-400" />
-                  <span>{MAP_STYLES[currentStyle].icon}</span>
-                </button>
-                {showStyleMenu && (
-                  <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-44 font-mono text-xs space-y-1">
-                    <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
-                    {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
-                      <button
-                        key={styleKey}
-                        onClick={() => { setCurrentStyle(styleKey); setShowStyleMenu(false); }}
-                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
-                          currentStyle === styleKey
-                            ? 'bg-cyan-500/20 text-cyan-300 font-bold'
-                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        <span>{MAP_STYLES[styleKey].name}</span>
-                        <span>{MAP_STYLES[styleKey].icon}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {mapEngine === 'maplibre' && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowStyleMenu(!showStyleMenu)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 text-[11px] font-bold font-mono text-slate-300 hover:text-white"
+                  >
+                    <Layers className="w-3 h-3 text-cyan-400" />
+                    <span>{MAP_STYLES[currentStyle].icon}</span>
+                  </button>
+                  {showStyleMenu && (
+                    <div className="absolute right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-1.5 z-30 w-48 font-mono text-xs space-y-1">
+                      <div className="text-[10px] text-slate-500 font-bold px-2 py-1 uppercase">Select Map Style</div>
+                      {(Object.keys(MAP_STYLES) as MapStyleType[]).map((styleKey) => (
+                        <button
+                          key={styleKey}
+                          onClick={() => { setCurrentStyle(styleKey); setShowStyleMenu(false); }}
+                          className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-all ${
+                            currentStyle === styleKey
+                              ? 'bg-cyan-500/20 text-cyan-300 font-bold'
+                              : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                          }`}
+                        >
+                          <span>{MAP_STYLES[styleKey].name}</span>
+                          <span>{MAP_STYLES[styleKey].icon}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1054,15 +1133,33 @@ export const MapContainer: React.FC<MapProps> = ({
 
       {/* Main Map Container Canvas */}
       <div className="flex-1 relative">
-        <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
+        {mapEngine === 'google-native' ? (
+          <GoogleTrafficMap
+            center={activeCenter}
+            zoom={zoom}
+            showTrafficLayer={showTrafficLayer}
+            junctions={junctions}
+            incidents={incidents}
+            routes={routes}
+            onJunctionClick={onJunctionClick}
+          />
+        ) : (
+          <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
+        )}
 
         {/* Legend Overlay */}
         {/* Traffic Legend */}
         <div className="absolute bottom-3 left-3 bg-slate-900/90 backdrop-blur-md p-2.5 rounded-lg border border-slate-800 text-[11px] text-slate-300 space-y-1 z-10 shadow-lg font-mono">
           <div className="font-bold text-slate-400 text-[10px] uppercase flex items-center justify-between gap-4">
             <span>{selectedCity} Live Network</span>
-            <span className="text-cyan-400 text-[9px]">MapLibre Active</span>
+            <span className="text-cyan-400 text-[9px]">{mapEngine === 'google-native' ? 'Google Maps JS API' : 'MapLibre Engine'}</span>
           </div>
+          {showTrafficLayer && (
+            <div className="text-[9px] font-bold uppercase text-emerald-400 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+              <span>GOOGLE TRAFFIC LAYER ACTIVE</span>
+            </div>
+          )}
           {trafficFlowRef.current?.meta?.source && (
             <div className={`text-[9px] font-bold uppercase ${
               trafficFlowRef.current.meta.source === 'HERE' ? 'text-emerald-400' : 'text-amber-400'

@@ -21,6 +21,7 @@ import {
   Building2,
   Eye,
   X,
+  Scale,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -74,6 +75,12 @@ const ADMIN_GROUPS: SidebarGroup[] = [
     items: [
       { label: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
       { label: 'Reports', path: '/admin/reports', icon: FileSpreadsheet },
+    ],
+  },
+  {
+    module: 'judicial',
+    items: [
+      { label: 'Judge Q&A', path: '/admin/judge-qa', icon: Scale },
     ],
   },
   {
